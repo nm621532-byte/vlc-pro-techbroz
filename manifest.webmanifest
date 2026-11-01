@@ -1,0 +1,19 @@
+{
+  "name": "VLC Pro – Video Player",
+  "short_name": "VLC Pro",
+  "description": "VLC Pro by Tech Bro Z – a video player that runs in your phone's browser. Educational project, not affiliated with VideoLAN.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b10",
+  "theme_color": "#0b0b10",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-/* VLC Clone (Tech Bro Z) — Educational clone, not affiliated with VideoLAN.
+/* VLC Pro (Tech Bro Z) — Educational project, not affiliated with VideoLAN.
    Everything runs in your browser: videos, thumbnails, playlists and settings are stored
    on your own device (IndexedDB + localStorage). Nothing is uploaded to any server. */
 (() => {
@@ -76,8 +76,10 @@ const DB = {
   open() {
     return new Promise((res) => {
       if (!('indexedDB' in window)) return res(false);
-      const r = indexedDB.open('vlc-clone-techbroz', 1);
-      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('media', { keyPath: 'id' }); d.createObjectStore('playlists', { keyPath: 'id' }); d.createObjectStore('blobs'); };
+      const r = indexedDB.open('vlc-clone-techbroz', 2); // DB name kept from v1 so existing libraries survive the rename
+      r.onupgradeneeded = () => { const d = r.result, has = n => d.objectStoreNames.contains(n);
+        if (!has('media')) d.createObjectStore('media', { keyPath: 'id' }); if (!has('playlists')) d.createObjectStore('playlists', { keyPath: 'id' });
+        if (!has('blobs')) d.createObjectStore('blobs'); if (!has('dirs')) d.createObjectStore('dirs', { keyPath: 'id' }); };
       r.onsuccess = () => { this.db = r.result; res(true); };
       r.onerror = () => res(false);
     });
@@ -102,7 +104,8 @@ const params = new URLSearchParams(location.search);
 const DEF = { style: 'glass', theme: 'dark', view: 'list', sort: 'name', dir: 1, group: true, bgAudio: true, eq: [0, 0, 0, 0, 0], eqPreset: 'Flat', boost: 100, subSize: 18 };
 let SET = Object.assign({}, DEF, JSON.parse(localStorage.getItem('vlc-settings') || '{}'));
 const saveSet = () => localStorage.setItem('vlc-settings', JSON.stringify(SET));
-const S = { media: [], playlists: [], nav: 'video', tab: { video: 0, audio: 0 }, folder: null, playlist: null, sub: null, search: null };
+const SRC = window.VLCSources;
+const S = { media: [], playlists: [], dirs: [], scanning: null, nav: 'video', tab: { video: 0, audio: 0 }, folder: null, playlist: null, sub: null, search: null };
 const blobCache = new Map(); const thumbURL = new Map();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -166,29 +169,111 @@ const AEXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|amr|wma)$/i;
 function kindOf(f, force) { if (f.type.startsWith('audio/') || AEXT.test(f.name)) return 'audio'; if (f.type.startsWith('video/') || VEXT.test(f.name)) return 'video'; return force || 'video'; }
 const stripExt = n => n.replace(/\.[^.]{1,5}$/, '');
 
-async function addFiles(fileList, force) {
-  const files = [...fileList]; if (!files.length) return;
-  let ok = 0, skipped = 0, failed = 0;
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    if (S.media.some(m => m.file === f.name && m.size === f.size)) { skipped++; continue; }
-    toast(`Adding ${i + 1}/${files.length}: ${f.name}`, 0);
-    const kind = kindOf(f, force);
+// items: File objects, or { file, folder, src, rel } from a folder scan. Dedupe by name + size + lastModified.
+const mkey = m => `${m.file}|${m.size}|${m.lm || 0}`;
+const known = f => S.media.some(m => m.file === f.name && m.size === f.size && (!m.lm || !f.lastModified || m.lm === f.lastModified));
+async function addFiles(fileList, force, opts = {}) {
+  const items = [...fileList].map(x => x instanceof Blob ? { file: x } : x).filter(x => x && x.file); if (!items.length) { if (!opts.quiet) render(); return { ok: 0, skipped: 0, failed: 0 }; }
+  let ok = 0, skipped = 0, failed = 0, done = 0; const seen = new Set(); const todo = [];
+  for (const it of items) { const f = it.file, k = SRC.fkey(f); if (known(f) || seen.has(k)) { skipped++; continue; } seen.add(k); todo.push(it); }
+  const label = opts.label ? opts.label + ' — ' : '';
+  if (todo.length) toast(`${label}adding 0/${todo.length}…`, 0);
+  let lastR = 0; const tick = () => { const now = performance.now(); if (now - lastR > 250 || done === todo.length) { lastR = now; render(); } };
+  await SRC.pool(todo, 2, async (it, i) => {             // max 2 thumbnails at a time → smooth on phones
+    const f = it.file; const kind = kindOf(f, force);
     const meta = await probe(f, kind);
-    if (meta.error) { failed++; continue; }
-    const m = { id: uid(), name: stripExt(f.name), file: f.name, kind, size: f.size, mime: f.type, duration: meta.duration, w: meta.w, h: meta.h,
-      thumb: meta.thumb, added: Date.now() + i, pos: 0, lastPlayed: 0, fav: false, hasBlob: true, sub: null, subName: null };
+    done++;
+    if (meta.error) { failed++; return; }
+    const m = { id: uid(), name: stripExt(f.name), file: f.name, kind, size: f.size, lm: f.lastModified || 0, mime: f.type, duration: meta.duration, w: meta.w, h: meta.h,
+      thumb: meta.thumb, added: Date.now() + i, pos: 0, lastPlayed: 0, fav: false, hasBlob: false, sub: null, subName: null,
+      folder: it.folder || null, src: it.src || null, rel: it.rel || null };
     blobCache.set(m.id, f);
-    try { await DB.put('blobs', f, m.id); } catch (e) { m.hasBlob = false; }
+    if (!m.src) { try { await DB.put('blobs', f, m.id); m.hasBlob = true; } catch (e) { m.hasBlob = false; } }   // folder files are re-read from the folder, not copied
     try { await DB.put('media', m); } catch (e) { /* metadata kept in memory only */ }
     if (m.thumb) thumbURL.set(m.id, URL.createObjectURL(m.thumb));
-    S.media.push(m); ok++; render();
-  }
+    S.media.push(m); ok++;
+    toast(`${label}adding ${done}/${todo.length}…`, 0); tick();
+  });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-  const parts = [`${ok} added`]; if (skipped) parts.push(`${skipped} already in library`); if (failed) parts.push(`${failed} can't play in this browser`);
-  toast(parts.join(' • '), 3500);
+  if (!opts.quiet) { const parts = [`${ok} added`]; if (skipped) parts.push(`${skipped} already in library`); if (failed) parts.push(`${failed} can't play in this browser`); toast(parts.join(' • '), 3500); }
+  render();
+  return { ok, skipped, failed };
+}
+
+/* ---------------- folder access: scan the phone's folders (sources.js) ---------------- */
+async function saveDir(d) { try { await DB.put('dirs', { id: d.id, name: d.name, handle: d.handle, added: d.added }); d.saved = true; } catch (e) { d.saved = false; } }
+async function linkFolder(handle) {
+  for (const d of S.dirs) { try { if (d.handle && await d.handle.isSameEntry(handle)) { d.handle = handle; return rescanDir(d, { ask: true }); } } catch (e) {} }
+  const d = { id: uid(), name: handle.name, handle, added: Date.now(), perm: 'granted', count: 0 };
+  S.dirs.push(d); await saveDir(d);
+  return rescanDir(d, { ask: true });
+}
+async function rescanDir(d, o = {}) {
+  let perm = 'granted';
+  try { perm = await SRC.permission(d.handle, o.ask); } catch (e) { perm = 'prompt'; }
+  d.perm = perm;
+  if (perm !== 'granted') { render(); return null; }
+  S.scanning = { name: d.name, found: 0 }; toast(`📂 “${d.name}” scan ho raha hai…`, 0); render();
+  let found = [];
+  try { found = await SRC.scanHandle(d.handle, n => { S.scanning.found = n; toast(`📂 ${n} videos mile…`, 0); }); }
+  catch (e) { S.scanning = null; toast(`Couldn't read “${d.name}”`, 4000); render(); return null; }
+  const keys = new Set(found.map(x => SRC.fkey(x.file)));
+  const gone = S.media.filter(m => m.src === d.id && !keys.has(mkey(m)));       // deleted / moved on the phone → drop from library (files untouched)
+  for (const m of gone) { if (P.cur === m) stopPlayback(); S.media = S.media.filter(x => x !== m); await DB.del('media', m.id).catch(() => {}); blobCache.delete(m.id); }
+  if (gone.length) for (const p of S.playlists) { const n = p.items.length; p.items = p.items.filter(byId); if (p.items.length !== n) await DB.put('playlists', p).catch(() => {}); }
+  for (const x of found) { const m = S.media.find(m => m.src === d.id && mkey(m) === SRC.fkey(x.file)); if (m) blobCache.set(m.id, x.file); }
+  const r = await addFiles(found.map(x => ({ ...x, src: d.id })), null, { quiet: true, label: `📂 ${found.length} videos mile` });
+  d.count = S.media.filter(m => m.src === d.id).length; S.scanning = null;
+  const msg = [`📂 ${d.name}: ${found.length} files`]; if (r.ok) msg.push(`${r.ok} new`); if (gone.length) msg.push(`${gone.length} removed`); if (r.failed) msg.push(`${r.failed} can't play here`);
+  toast(msg.join(' • '), 4000); render();
+  return { found: found.length, added: r.ok, removed: gone.length, skipped: r.skipped };
+}
+async function rescanAll(o = {}) { const out = []; for (const d of S.dirs) out.push(await rescanDir(d, o)); return out; }
+async function scanFolder() {
+  const c = SRC.caps();
+  if (c.native) {
+    S.scanning = { name: 'phone', found: 0 }; render();
+    let items = []; try { items = await SRC.native.scan(n => { S.scanning.found = n; toast(`📂 ${n} videos mile…`, 0); }); } catch (e) { toast('Permission nahi mili — Settings me allow karo', 5000); }
+    S.scanning = null; return addFiles(items.map(x => ({ ...x, src: null })), null, { label: `📂 ${items.length} videos mile` });
+  }
+  if (c.folderPicker) {
+    let h; try { h = await SRC.pickFolder(); } catch (e) { return null; }      // user cancelled
+    return linkFolder(h);
+  }
+  if (c.folderInput) return $('#fileDir').click();
+  return $('#fileVideo').click();
+}
+async function unlinkDir(id) {
+  const d = S.dirs.find(x => x.id === id); if (!d) return;
+  S.dirs = S.dirs.filter(x => x !== d); await DB.del('dirs', id).catch(() => {});
+  const list = S.media.filter(m => m.src === id);
+  for (const m of list) { if (P.cur === m) stopPlayback(); await DB.del('media', m.id).catch(() => {}); }
+  S.media = S.media.filter(m => m.src !== id); render(); toast(`“${d.name}” removed from VLC Pro (files on the phone are not touched)`, 4000);
+}
+async function restoreDirs() {
+  let rows = []; try { rows = await DB.all('dirs'); } catch (e) {}
+  S.dirs = rows.map(r => ({ ...r, perm: 'unknown', count: S.media.filter(m => m.src === r.id).length, saved: true }));
+  for (const d of S.dirs) {                                   // permission still granted → rescan for new / removed files automatically
+    let p = 'prompt'; try { p = await SRC.permission(d.handle, false); } catch (e) {}
+    d.perm = p; if (p === 'granted') rescanDir(d);
+  }
   render();
 }
+const accessHTML = () => {
+  const c = SRC.caps();
+  const main = c.native || c.folderPicker ? `<button class="btn" data-act="scan-folder">${I.folder}Allow access / Folder chuno</button>`
+    : c.folderInput ? `<button class="btn" data-act="scan-folder">${I.folder}Poora folder chuno</button>` : '';
+  const tip = c.native || c.folderPicker ? 'Ek baar folder chuno (jaise DCIM, Movies ya WhatsApp Video) — naye videos har baar khud aa jayenge.'
+    : 'Ek baar poora folder chuno (jaise DCIM/Camera ya WhatsApp Video) — saare videos ek saath add ho jayenge.';
+  return `<div class="empty access-card"><div class="ac-ic">${I.folder}</div><h2>Phone ke saare videos, ek tap mein</h2>
+    <p>${tip} Sab kuch sirf aapke phone pe rehta hai — kuch bhi upload nahi hota.</p>
+    <div class="ac-btns">${main}<button class="btn ghost" data-act="add-video">${I.add}Ek-ek video chuno</button></div></div>`;
+};
+const accessBarHTML = () => {
+  const need = S.dirs.filter(d => d.perm === 'prompt' || d.perm === 'denied');
+  if (S.scanning) return `<div class="access-bar"><span>📂 Scan ho raha hai… ${S.scanning.found} videos mile</span></div>`;
+  return need.length ? `<div class="access-bar"><span>📂 ${need.map(d => esc(d.name)).join(', ')} — naye videos dekhne ke liye access do</span><button class="btn" data-act="refresh-access">Refresh access</button></div>` : '';
+};
 async function saveMedia(m) { try { await DB.put('media', m); } catch (e) {} }
 
 /* ---------------- sorting / grouping (like VLC "group videos by name") ---------------- */
@@ -204,10 +289,10 @@ function lcp(names) { let p = names[0]; for (const n of names) { let i = 0; whil
 function videoEntries(list) {
   if (!SET.group) return list.slice().sort(sorter).map(m => ({ type: 'media', m }));
   const map = new Map();
-  for (const m of list) { const k = m.name.toLowerCase().slice(0, 6); if (!map.has(k)) map.set(k, []); map.get(k).push(m); }
+  for (const m of list) { const k = m.folder ? 'dir:' + m.folder.toLowerCase() : m.name.toLowerCase().slice(0, 6); if (!map.has(k)) map.set(k, []); map.get(k).push(m); }  // phone folder (like real VLC) or name prefix
   const out = [];
   for (const [k, arr] of map) {
-    if (arr.length > 1) { arr.sort(sorter); out.push({ type: 'group', key: k, name: lcp(arr.map(x => x.name)), items: arr,
+    if (arr.length > 1) { arr.sort(sorter); out.push({ type: 'group', key: k, name: k.startsWith('dir:') ? arr[0].folder : lcp(arr.map(x => x.name)), items: arr,
       added: Math.max(...arr.map(x => x.added || 0)), duration: arr.reduce((s, x) => s + (x.duration || 0), 0), size: arr.reduce((s, x) => s + (x.size || 0), 0) }); }
     else out.push({ type: 'media', m: arr[0] });
   }
@@ -247,7 +332,7 @@ function playlistRow(p) {
 }
 const wrap = rows => `<div class="${SET.view === 'grid' ? 'grid' : 'list'}">${rows}</div>`;
 const emptyHTML = (icon, title, text, btns) => `<div class="empty"><div class="big-ic">${icon}</div><h2>${esc(title)}</h2><p>${text}</p>${btns || ''}</div>`;
-const FOOT = `<div class="foot-note">Educational clone, not affiliated with VideoLAN • Your videos never leave this phone</div>`;
+const FOOT = `<div class="foot-note">VLC Pro • Educational project, not affiliated with VideoLAN • Your videos never leave this phone</div>`;
 
 function setToolbar(title, backFn) {
   const fm = !!backFn; $('#app').classList.toggle('folder-mode', fm);
@@ -255,8 +340,13 @@ function setToolbar(title, backFn) {
   $('#tbBack').onclick = backFn || null;
 }
 function setTabs(names, active, key) {
-  $('#tabs').innerHTML = names.map((n, i) => `<button class="tab${i === active ? ' active' : ''}" role="tab" aria-selected="${i === active}" data-tab="${i}">${esc(n)}</button>`).join('');
-  $('#tabs').dataset.key = key || '';
+  const t = $('#tabs'); const sig = names.join('|') + '#' + (key || '');
+  if (t.dataset.sig !== sig) {
+    t.innerHTML = names.map((n, i) => `<button class="tab${i === active ? ' active' : ''}" role="tab" aria-selected="${i === active}" data-tab="${i}">${esc(n)}</button>`).join('')
+      + (names.length ? '<i class="tab-ind" aria-hidden="true"></i>' : '');
+    t.dataset.sig = sig; t.dataset.key = key || ''; Liquid.resetTabs();
+  } else $$('.tab', t).forEach((b, i) => { b.classList.toggle('active', i === active); b.setAttribute('aria-selected', i === active); });
+  if (names.length) Liquid.tabs(active);
 }
 const match = (m, q) => !q || m.name.toLowerCase().includes(q);
 const noRes = () => emptyHTML(I.search, 'No results', `Nothing matches “${esc(S.search)}”.`);
@@ -264,6 +354,7 @@ const noRes = () => emptyHTML(I.search, 'No results', `Nothing matches “${esc(
 function render() {
   const c = $('#content'); const q = (S.search || '').trim().toLowerCase();
   $$('#bottomnav button').forEach(b => b.classList.toggle('active', b.dataset.nav === S.nav));
+  Liquid.nav();
   const fabOn = !S.folder && !S.playlist && !S.sub && ((S.nav === 'video' && S.tab.video === 0) || (S.nav === 'audio' && S.tab.audio === 0));
   $('#fab').classList.toggle('hidden', !fabOn);
   let html = '';
@@ -284,12 +375,12 @@ function render() {
     html = items.length ? `<div style="padding:12px 14px 10px"><button class="btn ghost" data-act="clear-history">${I.del}Clear history</button></div>` + wrap(items.map(m => mediaRow(m)).join(''))
       : emptyHTML(I.history, 'No history yet', 'Videos and songs you play show up here.');
   } else if (S.nav === 'video') {
-    setToolbar('VLC'); setTabs(['Videos', 'Playlists'], S.tab.video, 'video');
+    setToolbar('VLC Pro'); setTabs(['Videos', 'Playlists'], S.tab.video, 'video');
     if (S.tab.video === 0) {
       const vids = videos();
-      if (!vids.length) html = emptyHTML(I.clap, 'No videos yet', 'Add videos from your phone. They stay on this phone only — nothing is uploaded.', `<button class="btn" data-act="add-video">${I.add}Add videos</button>`) + FOOT;
+      if (!vids.length) html = accessBarHTML() + (S.scanning ? '' : accessHTML()) + FOOT;
       else if (q) { const r = vids.filter(m => match(m, q)).sort(sorter); html = r.length ? wrap(r.map(m => mediaRow(m)).join('')) : noRes(); }
-      else html = wrap(videoEntries(vids).map(e => e.type === 'group' ? groupRow(e) : mediaRow(e.m)).join(''));
+      else html = accessBarHTML() + wrap(videoEntries(vids).map(e => e.type === 'group' ? groupRow(e) : mediaRow(e.m)).join(''));
     } else html = playlistsHTML(q);
   } else if (S.nav === 'audio') {
     setToolbar('Audio'); setTabs(['Tracks', 'Playlists'], S.tab.audio, 'audio');
@@ -303,6 +394,7 @@ function render() {
     const hist = S.media.filter(m => m.lastPlayed && match(m, q)).sort((a, b) => b.lastPlayed - a.lastPlayed).slice(0, 5);
     const groups = videoEntries(videos()).filter(e => e.type === 'group');
     html = `<div class="section-h">Local storage</div>
+      <div class="set" data-act="scan-folder" tabindex="0"><span class="si">${I.folder}</span><div class="st"><b>Scan a phone folder</b><small>All videos in DCIM, Movies, WhatsApp Video… at once</small></div></div>
       <div class="set" data-act="add-video" tabindex="0"><span class="si">${I.phone}</span><div class="st"><b>Add videos from phone</b><small>Pick one or many videos</small></div></div>
       <div class="set" data-act="add-audio" tabindex="0"><span class="si">${I.note}</span><div class="st"><b>Add audio from phone</b><small>MP3, M4A, WAV, OGG…</small></div></div>
       <div class="section-h">Favorites</div>${favs.length ? wrap(favs.map(m => mediaRow(m)).join('')) : '<div class="sh-body">Tap ⋮ → “Add to favorites” on any video or song.</div>'}
@@ -328,6 +420,9 @@ function moreHTML() {
   <div class="set"><span class="si">${I.glass}</span><div class="st"><b>Style</b><small>Liquid glass or exact classic look</small></div>${seg('style', [['glass', 'Liquid Glass'], ['classic', 'Classic']])}</div>
   <div class="set"><span class="si">${I.theme}</span><div class="st"><b>Theme</b></div>${seg('theme', [['dark', 'Dark'], ['light', 'Light']])}</div>
   <div class="set"><span class="si">${SET.view === 'grid' ? I.grid : I.listic}</span><div class="st"><b>Video list</b></div>${seg('view', [['list', 'List'], ['grid', 'Grid']])}</div>
+  <div class="section-h">Media folders</div>
+  ${S.dirs.map(d => `<div class="set"><span class="si">${I.folder}</span><div class="st"><b>${esc(d.name)}</b><small>${d.count || 0} files • ${d.perm === 'granted' ? 'access on' : 'tap Rescan to allow access'}</small></div><span class="seg"><button data-act="rescan" data-dir="${d.id}">Rescan</button><button data-act="unlink-dir" data-dir="${d.id}">Remove</button></span></div>`).join('')}
+  <div class="set" data-act="scan-folder" tabindex="0"><span class="si">${I.add}</span><div class="st"><b>${SRC.caps().folderPicker || SRC.caps().native ? 'Allow access / add a folder' : 'Pick a whole folder'}</b><small>${SRC.caps().native ? 'Uses the phone\'s media permission' : SRC.caps().folderPicker ? 'New videos are found automatically each time you open the app' : 'This browser can\'t keep folder access, so pick the folder again to add new videos'}</small></div></div>
   <div class="section-h">Library</div>
   <div class="set" data-act="sort" tabindex="0"><span class="si">${I.sort}</span><div class="st"><b>Sort by</b><small>${sortName} (${SET.dir > 0 ? 'ascending' : 'descending'})</small></div></div>
   <div class="set"><span class="si">${I.group}</span><div class="st"><b>Group videos by name</b><small>Similar names become folders (“7 videos”)</small></div>${seg('group', [['true', 'On'], ['false', 'Off']])}</div>
@@ -338,7 +433,7 @@ function moreHTML() {
   <div class="set"><span class="si">${I.bg}</span><div class="st"><b>Background audio</b><small>Keep playing when you leave the app or close the player</small></div>${seg('bgAudio', [['true', 'On'], ['false', 'Off']])}</div>
   <div class="set" data-act="shortcuts" tabindex="0"><span class="si">${I.kb}</span><div class="st"><b>Keyboard shortcuts</b><small>For laptop / desktop</small></div></div>
   <div class="section-h">About</div>
-  <div class="set" data-act="about" tabindex="0"><span class="si">${I.info}</span><div class="st"><b>VLC Clone by Tech Bro Z</b><small>Educational clone, not affiliated with VideoLAN</small></div></div>`;
+  <div class="set" data-act="about" tabindex="0"><span class="si">${I.info}</span><div class="st"><b>VLC Pro by Tech Bro Z</b><small>Educational project, not affiliated with VideoLAN</small></div></div>`;
 }
 
 /* ---------------- bottom sheets (menus / dialogs) ---------------- */
@@ -433,11 +528,11 @@ function sortSheet() {
     onSheet({ k: b => { const k = b.dataset.k; if (SET.sort === k) SET.dir = -SET.dir; else { SET.sort = k; SET.dir = k === 'name' ? 1 : -1; } saveSet(); closeSheet(); render(); toast(`Sorted by ${opts.find(o => o[0] === k)[1]} ${SET.dir > 0 ? '↑' : '↓'}`); } }));
 }
 function mainMenu() {
-  openSheet(item('addv', I.add, 'Add videos') + item('adda', I.note, 'Add audio') + item('sort', I.sort, 'Sort by…') + item('view', SET.view === 'grid' ? I.listic : I.grid, SET.view === 'grid' ? 'List view' : 'Grid view')
+  openSheet(item('scan', I.folder, 'Scan phone folder') + item('addv', I.add, 'Add videos') + item('adda', I.note, 'Add audio') + item('sort', I.sort, 'Sort by…') + item('view', SET.view === 'grid' ? I.listic : I.grid, SET.view === 'grid' ? 'List view' : 'Grid view')
     + item('group', I.group, 'Group videos by name', SET.group ? 'On' : 'Off') + item('style', I.glass, 'Style', SET.style === 'glass' ? 'Liquid Glass' : 'Classic') + item('theme', I.theme, 'Theme', SET.theme === 'dark' ? 'Dark' : 'Light')
     + item('hist', I.history, 'Playback history') + item('set', I.info, 'Settings & about'),
   onSheet({
-    addv: () => { closeSheet(); $('#fileVideo').click(); }, adda: () => { closeSheet(); $('#fileAudio').click(); }, sort: sortSheet,
+    scan: () => { closeSheet(); scanFolder(); }, addv: () => { closeSheet(); $('#fileVideo').click(); }, adda: () => { closeSheet(); $('#fileAudio').click(); }, sort: sortSheet,
     view: () => { closeSheet(); setOpt('view', SET.view === 'grid' ? 'list' : 'grid'); },
     group: () => { closeSheet(); setOpt('group', !SET.group); },
     style: () => { closeSheet(); setOpt('style', SET.style === 'glass' ? 'classic' : 'glass'); },
@@ -451,11 +546,166 @@ function shortcutsSheet() {
   openSheet(`<div class="sh-h">Keyboard shortcuts</div><div class="sh-body"><table class="info">${k.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table></div>`);
 }
 function aboutSheet() {
-  openSheet(`<div class="sh-h"><span style="width:27px;height:33px;display:block">${CONE}</span>VLC Clone by Tech Bro Z</div><div class="sh-body">
-  <p><b style="color:var(--text)">Educational clone, not affiliated with VideoLAN.</b> “VLC” and the cone belong to VideoLAN; this is a personal learning project that copies the look of the VLC for Android video screen.</p>
+  openSheet(`<div class="sh-h"><span style="width:27px;height:33px;display:block">${CONE}</span>VLC Pro by Tech Bro Z</div><div class="sh-body">
+  <p><b style="color:var(--text)">Educational project, not affiliated with VideoLAN.</b> “VLC” and the cone belong to VideoLAN; VLC Pro is a personal learning project inspired by the VLC for Android video screen.</p>
   <p>🔒 Your videos, songs, playlists and history are stored only in this browser on your phone (IndexedDB). Nothing is uploaded — there is no server and no account.</p>
   <p>Made by Tech Bro Z — YouTube @techbrozdeveloper • Instagram @tech_bro_z_1</p></div>`);
 }
+
+
+/* ================= LIQUID MOTION =================
+   - a glass "blob" behind the active bottom-nav item that flows to the tapped item like liquid
+     (real damped-spring physics: it stretches along the direction of travel, squishes, overshoots, settles)
+   - the same liquid pill (Liquid Glass) / orange underline (Classic) on the top VIDEOS / PLAYLISTS tabs
+   - page content slides left/right in the direction of the change with a soft fade
+   - swipe left/right on the list to change tabs
+   Only transform + opacity are animated (smooth 60fps on phones); prefers-reduced-motion = instant. */
+const Liquid = (() => {
+  const RM = matchMedia('(prefers-reduced-motion: reduce)');
+  const reduced = () => RM.matches || params.has('nomotion');
+  const glass = () => root.dataset.style === 'glass';
+  const SEQ = [['video', 0], ['video', 1], ['audio', 0], ['audio', 1], ['browse', null], ['playlists', null], ['more', null]];
+  const stat = { navMoves: 0, tabMoves: 0, slides: 0, swipes: 0 };
+
+  // Damped spring (stiffness k, damping c) sampled at 60fps -> list of {p, v} with p: 0 -> 1 (overshoots a little)
+  function spring(k = 300, c = 21) {
+    const out = []; let p = 0, v = 0; const dt = 1 / 60;
+    for (let i = 0; i < 90; i++) {
+      const a = -k * (p - 1) - c * v; v += a * dt; p += v * dt; out.push({ p, v });
+      if (i > 12 && Math.abs(p - 1) < 0.002 && Math.abs(v) < 0.02) break;
+    }
+    out[out.length - 1] = { p: 1, v: 0 }; return out;
+  }
+  // Read where an element visually is right now (works mid-animation, so taps can interrupt smoothly)
+  function current(el, W) {
+    const m = new DOMMatrix(getComputedStyle(el).transform === 'none' ? undefined : getComputedStyle(el).transform);
+    return { cx: m.e + W / 2, w: W * m.a };
+  }
+  // Move element (base width W, transform-origin center) so its centre is at cx and its width is w.
+  function move(el, W, from, to, opt = {}) {
+    const fin = `translateX(${(to.cx - W / 2).toFixed(2)}px) scale(${(to.w / W).toFixed(4)},1)`;
+    if (el._anim) { el._anim.cancel(); el._anim = null; }
+    if (!from || reduced() || (Math.abs(from.cx - to.cx) < 0.5 && Math.abs(from.w - to.w) < 0.5)) { el.style.transform = fin; return false; }
+    const dist = to.cx - from.cx, steps = spring(opt.k, opt.c), frames = [];
+    for (const { p, v } of steps) {
+      const speed = Math.abs(v * dist);                              // px per second
+      const cx = from.cx + dist * p, w = from.w + (to.w - from.w) * Math.min(1, Math.max(0, p));
+      const extra = Math.min(opt.maxPx || 60, speed / (opt.per || 1400) * w);   // liquid stretch grows with speed (in px)
+      let sx = (w + extra) / W;
+      if (opt.bounds) {                                               // stay inside the bar: squash against its rounded ends
+        const room = 2 * Math.min(cx - opt.bounds[0], opt.bounds[1] - cx);
+        sx = Math.max(Math.min(sx, room / W), (w / W) * 0.72);
+      }
+      const st = Math.max(0, sx * W / w - 1);
+      const sy = 1 - Math.min(0.3, st * (opt.squish ?? 0.42));
+      frames.push({ transform: `translateX(${(cx - W / 2).toFixed(2)}px) scale(${sx.toFixed(4)},${sy.toFixed(4)})` });
+    }
+    frames[frames.length - 1] = { transform: fin };
+    el.style.transform = fin;
+    const a = el.animate(frames, { duration: steps.length * (1000 / 60), easing: 'linear' });
+    el._anim = a; el.classList.add('moving');
+    a.onfinish = a.oncancel = () => { if (el._anim === a) { el._anim = null; el.classList.remove('moving'); } };
+    return true;
+  }
+
+  // ---- bottom nav blob ----
+  let navIdx = -1, navStyle = '', navW = 0;
+  function nav(force) {
+    const blob = $('#navBlob'); if (!blob) return;
+    const btns = $$('#bottomnav button'), i = btns.findIndex(b => b.classList.contains('active'));
+    if (i < 0) return;
+    const b = btns[i], W = b.offsetWidth, st = root.dataset.style;
+    if (!W) return;
+    const fresh = force || navIdx < 0 || st !== navStyle || Math.abs(W - navW) > 0.5;
+    if (!fresh && i === navIdx) return;
+    const from = fresh ? null : current(blob, W);
+    blob.style.width = W + 'px'; blob.style.height = b.offsetHeight + 'px'; blob.style.top = b.offsetTop + 'px';
+    const nb = $('#bottomnav'), pad = parseFloat(getComputedStyle(nb).paddingLeft) || 0;
+    if (move(blob, W, from, { cx: b.offsetLeft + W / 2, w: W }, { k: 280, c: 19, per: 900, maxPx: 0.6 * W, bounds: [pad * 0.5, nb.clientWidth - pad * 0.5] })) stat.navMoves++;
+    navIdx = i; navStyle = st; navW = W;
+  }
+  // ---- top tabs pill / underline ----
+  let tabIdx = -1, tabStyle = '';
+  function resetTabs() { tabIdx = -1; }
+  function tabs(active, force) {
+    const t = $('#tabs'), ind = $('.tab-ind', t), btns = $$('.tab', t), b = btns[active];
+    if (!ind || !b || !b.offsetWidth) return;
+    const st = root.dataset.style, fresh = force || tabIdx < 0 || st !== tabStyle;
+    if (!fresh && active === tabIdx) return;
+    const W = glass() ? b.offsetWidth : 100;                     // classic underline: 100px base scaled to the tab's width
+    const from = fresh ? null : current(ind, W);
+    ind.style.width = W + 'px';
+    if (glass()) { ind.style.top = b.offsetTop + 'px'; ind.style.height = b.offsetHeight + 'px'; } else { ind.style.top = ''; ind.style.height = ''; }
+    const pl = parseFloat(getComputedStyle(t).paddingLeft) || 0;
+    const opt = glass() ? { k: 300, c: 20, per: 800, maxPx: 70, bounds: [pl, t.clientWidth - pl] } : { k: 320, c: 26, per: 1600, maxPx: 50, squish: 0 };
+    if (move(ind, W, from, { cx: b.offsetLeft + b.offsetWidth / 2, w: b.offsetWidth }, opt)) stat.tabMoves++;
+    tabIdx = active; tabStyle = st;
+  }
+  function relayout() { nav(true); const a = $('#tabs .tab.active'); if (a) tabs(+a.dataset.tab, true); }
+  addEventListener('resize', relayout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(relayout);
+
+  // ---- content slide ----
+  const pos = () => (S.folder || S.playlist || S.sub) ? -1 : SEQ.findIndex(([n, t]) => n === S.nav && (t === null || S.tab[n] === t));
+  function ghostOf(c, offset) {
+    const g = document.createElement('div'); g.className = 'content-ghost'; g.setAttribute('aria-hidden', 'true');
+    const cs = getComputedStyle(c);
+    Object.assign(g.style, { top: c.offsetTop + 'px', left: c.offsetLeft + 'px', width: c.offsetWidth + 'px', height: c.clientHeight + 'px' });
+    const inner = document.createElement('div'); inner.innerHTML = c.innerHTML;
+    inner.style.padding = cs.padding; inner.style.transform = `translateY(${-c.scrollTop}px)`;
+    $$('[id],[data-kind],[data-act],[tabindex]', inner).forEach(e => { ['id', 'data-kind', 'data-act', 'tabindex'].forEach(a => e.removeAttribute(a)); });
+    g.inert = true;
+    g.appendChild(inner); if (offset) g.style.transform = `translateX(${offset}px)`;
+    return g;
+  }
+  function slide(mutate, offset = 0) {
+    const c = $('#content'), before = pos();
+    const g = reduced() ? null : ghostOf(c, offset);
+    if (g) $('#app').insertBefore(g, $('#mini'));
+    mutate();
+    const after = pos(), dir = Math.sign(after - before);
+    c.style.transform = '';
+    if (!g) return;
+    if (!dir || before < 0 || after < 0) { g.remove(); return; }
+    const W = c.offsetWidth;
+    g.animate([{ transform: `translateX(${offset}px)`, opacity: 1 }, { opacity: 0, offset: 0.62 }, { transform: `translateX(${-dir * W * 0.5}px) scale(.95)`, opacity: 0 }],
+      { duration: 300, easing: 'cubic-bezier(.25,.8,.3,1)', fill: 'forwards' }).onfinish = () => g.remove();
+    c.animate([{ transform: `translateX(${dir * W * 0.34}px) scale(.97)`, opacity: 0 }, { offset: .55, opacity: 1 },
+      { transform: 'translateX(0) scale(1)', opacity: 1 }], { duration: 440, easing: 'cubic-bezier(.2,1.18,.35,1)' });
+    stat.slides++;
+  }
+  function goSeq(i, offset) {
+    const [n, t] = SEQ[i];
+    slide(() => { if (t !== null) S.tab[n] = t; go(n); }, offset);
+  }
+
+  // ---- swipe left / right on the content to change tabs ----
+  const c = $('#content'); let sw = null, swallowClick = 0;
+  c.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1 || pos() < 0 || S.search !== null) { sw = null; return; }
+    const t = e.touches[0]; sw = { x: t.clientX, y: t.clientY, t: performance.now(), lock: null, dx: 0 };
+  }, { passive: true });
+  c.addEventListener('touchmove', e => {
+    if (!sw) return; const t = e.touches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+    if (!sw.lock && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) sw.lock = Math.abs(dx) > Math.abs(dy) * 1.3 ? 'h' : 'v';
+    if (sw.lock !== 'h') return;
+    const p = pos(), edge = (dx > 0 && p <= 0) || (dx < 0 && p >= SEQ.length - 1);
+    sw.dx = dx * (edge ? 0.18 : 0.45);                            // rubber band at the first / last tab
+    if (!reduced()) c.style.transform = `translateX(${sw.dx.toFixed(1)}px)`;
+  }, { passive: true });
+  const end = e => {
+    if (!sw || sw.lock !== 'h') { sw = null; return; }
+    const raw = (e.changedTouches[0].clientX - sw.x), v = raw / Math.max(1, performance.now() - sw.t), p = pos();
+    const target = raw < 0 ? p + 1 : p - 1, off = sw.dx; sw = null; swallowClick = performance.now();
+    if ((Math.abs(raw) > 60 || Math.abs(v) > 0.45) && target >= 0 && target < SEQ.length) { stat.swipes++; goSeq(target, off); return; }
+    c.style.transform = '';
+    if (!reduced() && off) c.animate([{ transform: `translateX(${off}px)` }, { transform: 'translateX(0)' }], { duration: 380, easing: 'cubic-bezier(.2,1.4,.4,1)' });
+  };
+  c.addEventListener('touchend', end); c.addEventListener('touchcancel', end);
+  c.addEventListener('click', e => { if (performance.now() - swallowClick < 350) { e.stopPropagation(); e.preventDefault(); } }, true);
+
+  return { nav, tabs, resetTabs, slide, goSeq, pos, relayout, stat, SEQ };
+})();
 
 /* ---------------- navigation ---------------- */
 function go(nav) { closeSearch(true); if (S.folder || S.playlist || S.sub) dropLayer('detail'); S.nav = nav; S.folder = null; S.playlist = null; S.sub = null; render(); $('#content').scrollTop = 0; }
@@ -469,8 +719,8 @@ function openHistory() { openDetail('sub', 'history'); }
 function openSearch() { $('.tb-main').classList.add('hidden'); $('.tb-search').classList.remove('hidden'); S.search = ''; const i = $('#searchInput'); i.value = ''; i.focus(); }
 function closeSearch(silent) { $('.tb-main').classList.remove('hidden'); $('.tb-search').classList.add('hidden'); if (S.search !== null) { S.search = null; if (!silent) render(); } }
 
-$('#bottomnav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.nav); });
-$('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; const key = $('#tabs').dataset.key; if (key) { S.tab[key] = +b.dataset.tab; render(); $('#content').scrollTop = 0; } });
+$('#bottomnav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) Liquid.slide(() => go(b.dataset.nav)); });
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; const key = $('#tabs').dataset.key; if (key) Liquid.slide(() => { S.tab[key] = +b.dataset.tab; render(); $('#content').scrollTop = 0; }); });
 $('#btnSearch').onclick = openSearch;
 $('#searchBack').onclick = () => closeSearch();
 $('#searchClear').onclick = () => { $('#searchInput').value = ''; S.search = ''; render(); $('#searchInput').focus(); };
@@ -485,6 +735,7 @@ $('#fab').onclick = () => {
 };
 $('#fileVideo').addEventListener('change', e => { addFiles(e.target.files, 'video'); e.target.value = ''; });
 $('#fileAudio').addEventListener('change', e => { addFiles(e.target.files, 'audio'); e.target.value = ''; });
+$('#fileDir').addEventListener('change', e => { const items = SRC.fromFolderInput(e.target.files); e.target.value = ''; if (!items.length) return toast('Is folder mein koi video/audio nahi mila', 3500); addFiles(items, null, { label: `📂 ${items.length} videos mile` }); });
 
 function currentQueueFor(row) {
   const list = row.parentElement; const ids = $$(':scope > .row[data-kind=media]', list).map(r => r.dataset.id);
@@ -502,6 +753,10 @@ $('#content').addEventListener('click', async e => {
   if (act) {
     const a = act.dataset.act;
     if (a === 'add-video') return $('#fileVideo').click();
+    if (a === 'scan-folder') return scanFolder();
+    if (a === 'refresh-access') { for (const d of S.dirs.filter(d => d.perm !== 'granted')) await rescanDir(d, { ask: true }); return; }
+    if (a === 'rescan') { const d = S.dirs.find(x => x.id === act.dataset.dir); return d && rescanDir(d, { ask: true }); }
+    if (a === 'unlink-dir') return unlinkDir(act.dataset.dir);
     if (a === 'add-audio') return $('#fileAudio').click();
     if (a === 'new-playlist') return promptSheet('New playlist', 'My playlist', async v => { const p = { id: uid(), name: v, items: [], created: Date.now() }; S.playlists.push(p); await DB.put('playlists', p).catch(() => {}); render(); toast(`Playlist “${v}” created`); }, 'Create');
     if (a === 'pl-play' || a === 'pl-shuffle') return playPlaylist(S.playlists.find(p => p.id === S.playlist), a === 'pl-shuffle');
@@ -512,7 +767,7 @@ $('#content').addEventListener('click', async e => {
     if (a === 'about') return aboutSheet();
     if (a === 'storage') { const t = $('#storageTxt'); if (navigator.storage && navigator.storage.estimate) { const est = await navigator.storage.estimate(); t.textContent = `${size(est.usage || 0)} used of ${size(est.quota || 0)} available • ${S.media.length} files`; } else t.textContent = `${S.media.length} files`; return; }
     if (a === 'clear-lib') return openSheet(`<div class="sh-h">Clear library?</div><div class="sh-body">This removes all ${S.media.length} videos/songs and ${S.playlists.length} playlists from this app (your original files on the phone are not touched).</div><div class="sh-actions"><button class="btn ghost" data-sa="no">Cancel</button><button class="btn" data-sa="yes">Clear</button></div>`,
-      onSheet({ no: closeSheet, yes: async () => { closeSheet(); stopPlayback(); await DB.clear('media').catch(() => {}); await DB.clear('blobs').catch(() => {}); await DB.clear('playlists').catch(() => {}); S.media = []; S.playlists = []; blobCache.clear(); localStorage.removeItem('vlc-last'); render(); toast('Library cleared'); } }));
+      onSheet({ no: closeSheet, yes: async () => { closeSheet(); stopPlayback(); await DB.clear('media').catch(() => {}); await DB.clear('blobs').catch(() => {}); await DB.clear('playlists').catch(() => {}); await DB.clear('dirs').catch(() => {}); S.media = []; S.playlists = []; S.dirs = []; blobCache.clear(); localStorage.removeItem('vlc-last'); render(); toast('Library cleared'); } }));
   }
   if (!row) return;
   if (row.dataset.kind === 'media') {
@@ -544,6 +799,7 @@ async function loadCurrent(opts = {}) {
   if (P.cur && P.cur !== m) savePos();
   let blob = blobCache.get(m.id);
   if (!blob) { try { blob = await DB.get('blobs', m.id); } catch (e) {} if (blob) blobCache.set(m.id, blob); }
+  if (!blob && m.src) { const d = S.dirs.find(x => x.id === m.src); if (d) { try { if (await SRC.permission(d.handle, true) === 'granted') { d.perm = 'granted'; blob = await SRC.fileAt(d.handle, m.rel); blobCache.set(m.id, blob); } } catch (e) {} } }
   if (!blob) { relinkTarget = m; toast(`“${m.name}” was not saved on this phone — choose the file again`, 7000, 'Choose', () => $('#fileRelink').click()); return; }
   P.cur = m; P.A = P.B = null;
   if (P.url) URL.revokeObjectURL(P.url);
@@ -812,7 +1068,7 @@ function snapshot() {
   x.drawImage(pv, 0, 0);
   c.toBlob(b => {
     const a = document.createElement('a'); a.href = URL.createObjectURL(b);
-    a.download = `VLC_snapshot_${P.cur.name.replace(/[^\w-]+/g, '_').slice(0, 40)}_${fmt(pv.currentTime).replace(/:/g, '-')}.png`;
+    a.download = `VLC_Pro_snapshot_${P.cur.name.replace(/[^\w-]+/g, '_').slice(0, 40)}_${fmt(pv.currentTime).replace(/:/g, '-')}.png`;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     P.lastShot = { name: a.download, size: b.size }; flash('#dblL'); toast('Screenshot saved • ' + a.download, 3000);
   }, 'image/png');
@@ -874,7 +1130,7 @@ function setMediaSession(m) {
   if (!('mediaSession' in navigator)) return;
   try {
     const art = thumbURL.get(m.id);
-    navigator.mediaSession.metadata = new MediaMetadata({ title: m.name, artist: 'VLC Clone', album: m.kind === 'audio' ? 'Audio' : 'Video', artwork: art ? [{ src: art, sizes: '320x180', type: 'image/jpeg' }] : [] });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: m.name, artist: 'VLC Pro', album: m.kind === 'audio' ? 'Audio' : 'Video', artwork: art ? [{ src: art, sizes: '320x180', type: 'image/jpeg' }] : [] });
     const ms = navigator.mediaSession;
     [['play', () => pv.play()], ['pause', () => pv.pause()], ['seekbackward', () => skip(-10)], ['seekforward', () => skip(10)], ['previoustrack', prev], ['nexttrack', () => next(false)]].forEach(([a, f]) => { try { ms.setActionHandler(a, f); } catch (e) {} });
   } catch (e) {}
@@ -923,7 +1179,8 @@ async function init() {
   for (const m of S.media) if (m.thumb instanceof Blob) thumbURL.set(m.id, URL.createObjectURL(m.thumb));
   const nav = params.get('nav'); if (nav && ['video', 'audio', 'browse', 'playlists', 'more'].includes(nav)) S.nav = nav;
   render();
+  restoreDirs();
 }
-window.VLC = { S, P, get SET() { return SET; }, addFiles, render, srtToVtt, videoEntries };
+window.VLC = { S, P, get SET() { return SET; }, addFiles, render, srtToVtt, videoEntries, Liquid, linkFolder, rescanDir, rescanAll, scanFolder, unlinkDir };
 init();
 })();

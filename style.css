@@ -1,4 +1,4 @@
-/* VLC Clone by Tech Bro Z — educational clone, not affiliated with VideoLAN */
+/* VLC Pro by Tech Bro Z — educational project, not affiliated with VideoLAN */
 :root{
   --orange:#ff8800; --bg:#131313; --bar:#131313; --nav:#2a2a2a; --text:#ffffff; --text2:#bdbdbd;
   --tbtitle:#c6c6c6; --icon:#c9c9c9; --tab:#f3f3f3; --navic:#adadad; --sheet:#232323; --card:#1e1e1e;
@@ -46,7 +46,9 @@ svg{display:block;fill:currentColor}
 #tabs:empty{display:none}
 .tab{position:relative;height:51.4px;line-height:48px;padding:3.4px 0 0;font-size:15.4px;font-weight:500;letter-spacing:1.2px;text-transform:uppercase;color:var(--tab);white-space:nowrap}
 .tab.active{color:var(--orange)}
-.tab.active::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2.3px;background:var(--orange);border-radius:2px 2px 0 0}
+.tab{z-index:1;transition:color .25s}
+/* sliding indicator (Classic: orange underline that glides between tabs) */
+.tab-ind{position:absolute;left:0;bottom:0;height:2.3px;width:100px;background:var(--orange);border-radius:2px 2px 0 0;transform-origin:50% 50%;will-change:transform;pointer-events:none;z-index:0}
 
 /* ---------- content ---------- */
 #content{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;outline:none;padding-bottom:110px;-webkit-overflow-scrolling:touch}
@@ -101,7 +103,8 @@ svg{display:block;fill:currentColor}
 #fab{position:absolute;right:13.75px;bottom:calc(var(--navh) + var(--nb) + 21.2px);width:57.5px;height:57.5px;border-radius:50%;background:var(--orange);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 6px rgba(0,0,0,.35);z-index:5}
 #fab svg{width:27px;height:27px;margin-left:1px}
 #bottomnav{position:relative;flex:none;height:calc(var(--navh) + var(--nb));padding-bottom:var(--nb);background:var(--nav);display:flex;z-index:4}
-#bottomnav button{flex:1;display:flex;flex-direction:column;align-items:center;color:var(--navic);padding-top:7.5px;min-width:0}
+#navBlob{display:none}
+#bottomnav button{position:relative;z-index:1;flex:1;display:flex;flex-direction:column;align-items:center;color:var(--navic);padding-top:7.5px;min-width:0}
 #bottomnav .ni{width:24px;height:24px}
 #bottomnav .ni svg{width:24px;height:24px}
 #bottomnav .nl{font-size:13.2px;line-height:16px;margin-top:4px;color:#a3a3a3;white-space:nowrap}
@@ -240,8 +243,11 @@ svg{display:block;fill:currentColor}
 [data-style=glass] #tbTitle{left:52px;color:var(--text)}
 [data-style=glass] #tabs{margin:10px 10px 6px;height:44px;border-radius:22px;padding:4px;gap:4px}
 [data-style=glass] .tab{flex:1;height:34px;line-height:34px;padding:0;text-align:center;border-radius:17px;font-size:13.5px;color:var(--text2)}
-[data-style=glass] .tab.active{color:#fff;background:linear-gradient(135deg,rgba(255,150,30,.95),rgba(255,110,0,.85));box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 4px 14px rgba(255,136,0,.35)}
-[data-style=glass] .tab.active::after{display:none}
+[data-style=glass] .tab.active{color:#fff}
+/* Liquid Glass tab pill: flows between VIDEOS / PLAYLISTS (moved by a spring in app.js → Liquid) */
+[data-style=glass] .tab-ind{bottom:auto;top:4px;height:34px;border-radius:17px;background:linear-gradient(135deg,rgba(255,160,45,.96),rgba(255,110,0,.88));box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -2px 6px rgba(160,50,0,.25),0 4px 14px rgba(255,136,0,.38)}
+[data-style=glass] .tab-ind::before{content:"";position:absolute;left:12%;right:12%;top:2px;height:42%;border-radius:12px;background:linear-gradient(rgba(255,255,255,.55),rgba(255,255,255,0));opacity:.55;transition:opacity .2s}
+[data-style=glass] .tab-ind.moving::before{opacity:1}
 [data-style=glass] #content{padding:2px 10px 130px}
 [data-style=glass] .list .row{margin:0 0 8px;height:68px;border-radius:18px;padding-left:8px}
 [data-style=glass] .thumb{border-radius:12px}
@@ -251,9 +257,17 @@ svg{display:block;fill:currentColor}
 [data-style=glass] .grid .row{padding:6px 6px 10px;border-radius:18px}
 [data-style=glass] .grid .row .more{right:-4px;bottom:-2px}
 [data-style=glass] #bottomnav{position:absolute;left:12px;right:12px;bottom:calc(var(--nb) + 10px);height:64px;padding:0 6px;border-radius:32px;align-items:center}
-[data-style=glass] #bottomnav button{padding-top:0;height:54px;justify-content:center;border-radius:27px;transition:background .2s}
+[data-style=glass] #bottomnav button{padding-top:0;height:54px;justify-content:center;border-radius:27px;transition:color .25s}
 [data-style=glass] #bottomnav .nl{font-size:11.5px;margin-top:3px}
-[data-style=glass] #bottomnav button.active{background:rgba(255,136,0,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+/* Liquid Glass blob behind the active item: a clear glass lens that flows to the tapped item */
+[data-style=glass] #navBlob{display:block;position:absolute;left:0;top:5px;height:54px;width:70px;border-radius:27px;pointer-events:none;z-index:0;transform-origin:50% 50%;will-change:transform;background:radial-gradient(120% 90% at 50% 0%,rgba(255,255,255,.30),rgba(255,255,255,.06) 55%,rgba(255,255,255,0)),linear-gradient(180deg,rgba(255,150,40,.30),rgba(255,120,0,.16));border:1px solid rgba(255,255,255,.28);box-shadow:inset 0 1px 1px rgba(255,255,255,.55),inset 0 -2px 5px rgba(255,255,255,.10),inset 0 0 12px rgba(255,140,20,.25),0 6px 16px rgba(0,0,0,.28)}
+[data-style=glass] #navBlob::before{content:"";position:absolute;left:14%;right:14%;top:3px;height:38%;border-radius:20px;background:linear-gradient(rgba(255,255,255,.6),rgba(255,255,255,0));opacity:.5;transition:opacity .2s}
+[data-style=glass] #navBlob::after{content:"";position:absolute;inset:-1px;border-radius:inherit;box-shadow:0 0 18px 2px rgba(255,140,30,.45);opacity:0;transition:opacity .25s}
+[data-style=glass] #navBlob.moving::before,[data-style=glass] #navBlob.moving::after{opacity:1}
+[data-style=glass][data-theme=light] #navBlob{background:radial-gradient(120% 90% at 50% 0%,rgba(255,255,255,.85),rgba(255,255,255,.35) 60%),linear-gradient(180deg,rgba(255,150,40,.28),rgba(255,120,0,.14));border-color:rgba(255,255,255,.8)}
+/* the icon under the lens gets a little magnified, like looking through glass */
+[data-style=glass] #bottomnav .ni{transition:transform .45s cubic-bezier(.34,1.56,.64,1)}
+[data-style=glass] #bottomnav button.active .ni{transform:translateY(-1px) scale(1.14)}
 [data-style=glass] #fab{bottom:calc(var(--nb) + 88px);right:18px;background:radial-gradient(circle at 30% 25%,rgba(255,200,130,.95),rgba(255,136,0,.9) 45%,rgba(230,90,0,.92));border:1px solid rgba(255,255,255,.45);box-shadow:inset 0 2px 1px rgba(255,255,255,.55),inset 0 -3px 8px rgba(150,40,0,.35),0 10px 26px rgba(255,120,0,.45);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 [data-style=glass] #mini{bottom:calc(var(--nb) + 84px);left:14px;right:14px;border-radius:20px}
 [data-style=glass].has-mini #fab{bottom:calc(var(--nb) + 154px)}
@@ -278,3 +292,24 @@ svg{display:block;fill:currentColor}
 #player:has(#pctl.off) #subLine{bottom:calc(env(safe-area-inset-bottom,0px) + 34px)}
 .has-mini #content{padding-bottom:180px}
 [data-style=glass].has-mini #content{padding-bottom:210px}
+
+/* ---------- liquid page slide ---------- */
+#content{touch-action:pan-y}
+.content-ghost{position:absolute;overflow:hidden;pointer-events:none;z-index:1;will-change:transform,opacity}
+.content-ghost>div{will-change:transform}
+#content{will-change:auto}
+@media (prefers-reduced-motion: reduce){
+  .tab,#bottomnav button,#bottomnav .ni,#navBlob::before,#navBlob::after,.tab-ind::before{transition:none!important}
+}
+
+/* ---------- folder access (scan the phone's folders) ---------- */
+.access-card{padding:34px 22px 18px}
+.access-card .ac-ic{width:64px;height:64px;margin:0 auto 10px;border-radius:20px;display:flex;align-items:center;justify-content:center;color:var(--orange);background:rgba(255,136,0,.14)}
+.access-card .ac-ic svg{width:34px;height:34px}
+.access-card h2{font-size:19px;margin:6px 0 8px}
+.access-card .ac-btns{display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:16px}
+.access-card .btn svg{width:20px;height:20px}
+.access-bar{display:flex;align-items:center;gap:10px;margin:8px 12px;padding:10px 12px;border-radius:14px;background:rgba(255,136,0,.12);color:var(--text);font-size:13.5px}
+.access-bar span{flex:1;min-width:0}
+.access-bar .btn{height:34px;padding:0 14px;font-size:13px;flex:none}
+[data-style=glass] .access-bar{margin:6px 0 10px}
