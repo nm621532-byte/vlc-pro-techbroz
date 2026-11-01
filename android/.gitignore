@@ -4,6 +4,7 @@ keystore.properties
 *.jks
 *.keystore
 *.apk
+!release/VLC-Pro.apk
 *.aab
 native/build/
 native/app/build/

@@ -17,7 +17,7 @@
 
 VLC Pro ab **Android app** bhi hai — install karte hi phone ke saare videos folder-wise khud aa jaate hain (DCIM, Camera, Movies, WhatsApp Video…), ek-ek add karne ki zarurat nahi.
 
-1. **Download karo:** [VLC-Pro.apk](https://github.com/nm621532-byte/vlc-pro-techbroz/releases/download/v1.0/VLC-Pro.apk) (GitHub Release v1.0) ya https://vlc-pro-techbroz.sites.tab.bot/VLC-Pro.apk
+1. **Download karo:** https://vlc-pro-techbroz.sites.tab.bot/VLC-Pro.apk (seedha phone pe khulega) — ya GitHub se: [VLC-Pro.apk](https://github.com/nm621532-byte/vlc-pro-techbroz/raw/v1.0/android/release/VLC-Pro.apk) ([Release v1.0](https://github.com/nm621532-byte/vlc-pro-techbroz/releases/tag/v1.0))
 2. **Unknown sources allow karo:** file kholte hi phone poochhega "Install unknown apps" → us app (Chrome / Files / WhatsApp) ke liye **Allow from this source** on karo → wapas aao.
 3. **Install** dabao. (Play Protect "unknown app" bole to *More details → Install anyway* — app Play Store pe nahi hai isliye.)
 4. **Open karo** → screen aayegi "Saare videos dikhane ke liye permission do" → **Permission do** → **Allow**.

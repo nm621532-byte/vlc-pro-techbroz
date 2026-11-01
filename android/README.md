@@ -2,7 +2,7 @@
 
 Ye folder VLC Pro ka **Android app** hai. Same VLC Pro web app (repo root ki files) ko ek Android shell ([Capacitor](https://capacitorjs.com)) mein wrap kiya gaya hai, plus ek chhota native plugin jo phone ke saare videos aur gaane khud dhoondh leta hai — bilkul real VLC ki tarah.
 
-**Download:** [VLC-Pro.apk (GitHub Release v1.0)](../../releases/tag/v1.0)
+**Download:** https://vlc-pro-techbroz.sites.tab.bot/VLC-Pro.apk · [release/VLC-Pro.apk](release/VLC-Pro.apk) · [Release v1.0](https://github.com/nm621532-byte/vlc-pro-techbroz/releases/tag/v1.0)
 
 ## Kya karta hai
 - Pehli baar kholne par ek screen: **"Saare videos dikhane ke liye permission do"** → Permission do.
