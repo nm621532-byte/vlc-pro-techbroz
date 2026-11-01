@@ -1,0 +1,19 @@
+{
+  "name": "vlc-pro-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VLC Pro Android app (Capacitor shell + native MediaStore scanner). Educational project, not affiliated with VideoLAN.",
+  "scripts": {
+    "copy-web": "node scripts/copy-web.mjs",
+    "sync": "node scripts/copy-web.mjs && npx cap sync android",
+    "build:debug": "npm run sync && cd native && ./gradlew assembleDebug",
+    "build:release": "npm run sync && cd native && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/core": "6.2.3",
+    "@capacitor/android": "6.2.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "6.2.3"
+  }
+}

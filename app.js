@@ -258,6 +258,7 @@ async function rescanDir(d, o = {}) {
 async function rescanAll(o = {}) { const out = []; for (const d of S.dirs) out.push(await rescanDir(d, o)); return out; }
 async function scanFolder() {
   const c = SRC.caps();
+  if (window.VLCNative && window.VLCNative.active) return window.VLCNative.scan({ toast: true, ask: true });
   if (c.native) {
     S.scanning = { name: 'phone', found: 0 }; render();
     let items = []; try { items = await SRC.native.scan(n => { S.scanning.found = n; toast(`📂 Found ${n} videos…`, 0); }); } catch (e) { toast('Permission not given — allow it in Settings', 5000); }
@@ -536,11 +537,12 @@ async function removeMedia(list) {
   for (const m of list) {
     let b = blobCache.get(m.id); if (!b) { try { b = await DB.get('blobs', m.id); } catch (e) {} }
     saved.push({ m, b });
+    if (m.nid && window.VLCNative && window.VLCNative.hide) window.VLCNative.hide(m.nid);   // phone file stays; just hidden from the list
     S.media = S.media.filter(x => x !== m); await DB.del('media', m.id).catch(() => {}); await DB.del('blobs', m.id).catch(() => {});
   }
   render();
   toast(list.length > 1 ? `${list.length} removed from list` : 'Removed from list', 5000, 'Undo', async () => {
-    for (const s of saved) { S.media.push(s.m); if (s.b) { blobCache.set(s.m.id, s.b); await DB.put('blobs', s.b, s.m.id).catch(() => {}); } await saveMedia(s.m); }
+    for (const s of saved) { S.media.push(s.m); if (s.m.nid && window.VLCNative && window.VLCNative.unhide) window.VLCNative.unhide(s.m.nid); if (s.b) { blobCache.set(s.m.id, s.b); await DB.put('blobs', s.b, s.m.id).catch(() => {}); } await saveMedia(s.m); }
     render();
   });
 }
@@ -840,13 +842,13 @@ function playQueue(ids, idx, opts) { ids = ids.filter(byId); if (!ids.length) re
 async function loadCurrent(opts = {}) {
   const m = byId(P.queue[P.idx]); if (!m) return;
   if (P.cur && P.cur !== m) savePos();
-  let blob = blobCache.get(m.id);
-  if (!blob) { try { blob = await DB.get('blobs', m.id); } catch (e) {} if (blob) blobCache.set(m.id, blob); }
-  if (!blob && m.src) { const d = S.dirs.find(x => x.id === m.src); if (d) { try { if (await SRC.permission(d.handle, true) === 'granted') { d.perm = 'granted'; blob = await SRC.fileAt(d.handle, m.rel); blobCache.set(m.id, blob); } } catch (e) {} } }
-  if (!blob) { relinkTarget = m; toast(`“${m.name}” was not saved on this phone — choose the file again`, 7000, 'Choose', () => $('#fileRelink').click()); return; }
+  let blob = m.url ? null : blobCache.get(m.id);
+  if (!blob && !m.url) { try { blob = await DB.get('blobs', m.id); } catch (e) {} if (blob) blobCache.set(m.id, blob); }
+  if (!blob && !m.url && m.src) { const d = S.dirs.find(x => x.id === m.src); if (d) { try { if (await SRC.permission(d.handle, true) === 'granted') { d.perm = 'granted'; blob = await SRC.fileAt(d.handle, m.rel); blobCache.set(m.id, blob); } } catch (e) {} } }
+  if (!blob && !m.url) { relinkTarget = m; toast(`“${m.name}” was not saved on this phone — choose the file again`, 7000, 'Choose', () => $('#fileRelink').click()); return; }
   P.cur = m; P.A = P.B = null;
-  if (P.url) URL.revokeObjectURL(P.url);
-  P.url = URL.createObjectURL(blob);
+  if (P.url && P.url.startsWith('blob:')) URL.revokeObjectURL(P.url);
+  P.url = m.url || URL.createObjectURL(blob);   // Android app: played straight from the phone (native.js)
   $$('track', pv).forEach(t => t.remove()); $('#subLine').innerHTML = '';
   pv.defaultPlaybackRate = P.speed; pv.src = P.url; pv.playbackRate = P.speed;
   if (m.sub) attachSub(m.sub, m.subName);
@@ -1262,11 +1264,11 @@ async function init() {
   applyRootAttrs(); paintIcons();
   await DB.open();
   try { S.media = await DB.all('media'); S.playlists = await DB.all('playlists'); } catch (e) {}
-  for (const m of S.media) if (m.thumb instanceof Blob) thumbURL.set(m.id, URL.createObjectURL(m.thumb));
+  for (const m of S.media) if (m.thumb instanceof Blob) thumbURL.set(m.id, URL.createObjectURL(m.thumb)); else if (m.thumbSrc) thumbURL.set(m.id, m.thumbSrc);
   const nav = params.get('nav'); if (nav && ['video', 'audio', 'browse', 'playlists', 'more'].includes(nav)) S.nav = nav;
   render();
   restoreDirs();
 }
-window.VLC = { S, P, get SET() { return SET; }, setAccent, openTheme, THEME, addFiles, render, srtToVtt, videoEntries, Liquid, linkFolder, rescanDir, rescanAll, scanFolder, unlinkDir };
+window.VLC = { S, P, byId, thumbURL, saveMedia, toast, stopPlayback, DB, get SET() { return SET; }, setAccent, openTheme, THEME, addFiles, render, srtToVtt, videoEntries, Liquid, linkFolder, rescanDir, rescanAll, scanFolder, unlinkDir };
 init();
 })();

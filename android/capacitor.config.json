@@ -1,0 +1,12 @@
+{
+  "appId": "com.techbroz.vlcpro",
+  "appName": "VLC Pro",
+  "webDir": "www",
+  "android": {
+    "path": "native",
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

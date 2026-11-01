@@ -13,6 +13,20 @@
 
 🎞️ Liquid tab animation demo: [screenshots/vlc_pro_tabs.mp4](screenshots/vlc_pro_tabs.mp4)
 
+## 📱 Android APK install kaise karein
+
+VLC Pro ab **Android app** bhi hai — install karte hi phone ke saare videos folder-wise khud aa jaate hain (DCIM, Camera, Movies, WhatsApp Video…), ek-ek add karne ki zarurat nahi.
+
+1. **Download karo:** [VLC-Pro.apk](https://github.com/nm621532-byte/vlc-pro-techbroz/releases/download/v1.0/VLC-Pro.apk) (GitHub Release v1.0) ya https://vlc-pro-techbroz.sites.tab.bot/VLC-Pro.apk
+2. **Unknown sources allow karo:** file kholte hi phone poochhega "Install unknown apps" → us app (Chrome / Files / WhatsApp) ke liye **Allow from this source** on karo → wapas aao.
+3. **Install** dabao. (Play Protect "unknown app" bole to *More details → Install anyway* — app Play Store pe nahi hai isliye.)
+4. **Open karo** → screen aayegi "Saare videos dikhane ke liye permission do" → **Permission do** → **Allow**.
+5. Bas! Saare videos folder-wise aa jayenge. Naye videos ke liye app kholo ya list ko neeche kheencho (pull-to-refresh).
+
+- Android 7.0 se Android 14+ tak chalta hai. Size ~3 MB.
+- App mein INTERNET permission hi nahi hai — aapke videos aur data sirf aapke phone pe rehte hain.
+- Android app ka code: [`android/`](android/) folder.
+
 ## 🎨 Theme & Colour (10 colours)
 ![10 colours](screenshots/vlc_pro_colours.jpg)
 

@@ -357,3 +357,24 @@ svg{display:block;fill:currentColor}
 .reduce-motion .sw .dot,.reduce-motion .sw .dot::after,.reduce-motion .sw .dot svg{transition:none}
 @media (prefers-reduced-motion: reduce){.sw .dot,.sw .dot::after,.sw .dot svg{transition:none}}
 .theme-fade body,.theme-fade #toolbar,.theme-fade #tabs,.theme-fade #bottomnav,.theme-fade #content,.theme-fade .row,.theme-fade .set,.theme-fade .tab,.theme-fade .title,.theme-fade .sub,.theme-fade .seg,.theme-fade #mini,.theme-fade .th-prev,.theme-fade .section-h,.theme-fade .st b,.theme-fade .st small{transition:background-color .42s ease,color .42s ease,border-color .42s ease,box-shadow .42s ease!important}
+
+/* ---------- Android app (native.js): permission screen + pull-to-refresh ---------- */
+#permGate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:radial-gradient(120% 80% at 50% 0%,#2a1a08 0%,#0b0b10 60%);color:#fff;font-family:Roboto,system-ui,sans-serif}
+#permGate.hidden{display:none}
+#permGate .pg-card{max-width:380px;width:100%;text-align:center;padding:28px 22px;border-radius:28px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+#permGate .pg-card>svg{display:block;margin:0 auto}
+#permGate h1{margin:10px 0 2px;font-size:26px;color:#ff8800;letter-spacing:.3px}
+#permGate h2{margin:6px 0 10px;font-size:19px;line-height:1.3}
+#permGate p{margin:0 0 14px;color:#cfcfd6;font-size:14.5px;line-height:1.5}
+#permGate ul{list-style:none;padding:0;margin:0 0 20px;text-align:left;display:inline-block;color:#e8e8ee;font-size:14px;line-height:1.9}
+#permGate .pg-btn{display:block;width:100%;padding:15px;border:0;border-radius:16px;background:#ff8800;color:#111;font-size:16px;font-weight:700}
+#permGate .pg-skip{margin-top:12px;background:none;border:0;color:#a8a8b3;font-size:13.5px;text-decoration:underline}
+#ptr{position:fixed;left:50%;top:84px;z-index:50;width:38px;height:38px;border-radius:50%;opacity:0;transform:translate(-50%,0);
+  background:rgba(30,30,36,.92);box-shadow:0 4px 14px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;pointer-events:none}
+#ptr span{width:18px;height:18px;border-radius:50%;border:3px solid #ff8800;border-top-color:transparent}
+#ptr.ready span{border-color:#ffb24d;border-top-color:transparent}
+#ptr.spin{opacity:1!important}
+#ptr.spin span{animation:ptrspin .7s linear infinite}
+@keyframes ptrspin{to{transform:rotate(360deg)}}

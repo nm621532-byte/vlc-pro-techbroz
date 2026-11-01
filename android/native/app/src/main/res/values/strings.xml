@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VLC Pro</string>
+    <string name="title_activity_main">VLC Pro</string>
+    <string name="package_name">com.techbroz.vlcpro</string>
+    <string name="custom_url_scheme">com.techbroz.vlcpro</string>
+</resources>

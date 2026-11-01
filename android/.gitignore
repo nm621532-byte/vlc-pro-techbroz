@@ -1,0 +1,12 @@
+node_modules/
+www/
+keystore.properties
+*.jks
+*.keystore
+*.apk
+*.aab
+native/build/
+native/app/build/
+native/.gradle/
+native/local.properties
+native/capacitor-cordova-android-plugins/build/
