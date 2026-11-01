@@ -101,7 +101,7 @@ const DB = {
 
 /* ---------------- state ---------------- */
 const params = new URLSearchParams(location.search);
-const DEF = { style: 'glass', theme: 'dark', view: 'list', sort: 'name', dir: 1, group: true, bgAudio: true, eq: [0, 0, 0, 0, 0], eqPreset: 'Flat', boost: 100, subSize: 18 };
+const DEF = { style: 'glass', theme: 'dark', accent: 'orange', autoRotate: true, view: 'list', sort: 'name', dir: 1, group: true, bgAudio: true, eq: [0, 0, 0, 0, 0], eqPreset: 'Flat', boost: 100, subSize: 18 };
 let SET = Object.assign({}, DEF, JSON.parse(localStorage.getItem('vlc-settings') || '{}'));
 const saveSet = () => localStorage.setItem('vlc-settings', JSON.stringify(SET));
 const SRC = window.VLCSources;
@@ -114,12 +114,39 @@ function fmt(t) { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 
 function res(w, h) { const s = Math.min(w, h); if (!s) return ''; if (s >= 2100) return '4K'; if (s >= 1400) return '1440p'; if (s >= 1000) return '1080p'; if (s >= 700) return '720p'; if (s >= 560) return '576p'; if (s >= 470) return '480p'; if (s >= 350) return '360p'; if (s >= 230) return '240p'; return s + 'p'; }
 function size(b) { if (!b) return '0 B'; const u = ['B', 'KB', 'MB', 'GB']; let i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return b.toFixed(i ? 1 : 0) + ' ' + u[i]; }
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const THEME = window.VLCTheme;
+const accentInfo = id => THEME.ACCENTS.find(a => a.id === id) || THEME.ACCENTS[0];
+const modeName = m => ({ dark: 'Dark', light: 'Light', auto: 'Auto (phone)' })[m] || 'Dark';
+// smooth colour cross-fade when Dark/Light/Auto or the style changes (accent itself glides via registered CSS colours)
+function themeFade() {
+  if (root.classList.contains('reduce-motion') || params.has('nomotion') || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  root.classList.add('theme-fade'); clearTimeout(themeFade.t); themeFade.t = setTimeout(() => root.classList.remove('theme-fade'), 480);
+}
+function setAccent(id) {
+  if (!THEME.ACCENTS.some(a => a.id === id)) return;
+  SET.accent = id; saveSet(); params.delete('accent'); applyRootAttrs();
+  $$('.sw[data-accent]').forEach(b => { const on = b.dataset.accent === id; b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); });
+  const n = $('#thName'); if (n) n.textContent = accentInfo(id).name;
+}
+function themeHTML() {
+  const seg = (k, opts) => `<span class="seg">${opts.map(([v, l]) => `<button data-set="${k}" data-val="${v}" class="${String(SET[k]) === String(v) ? 'on' : ''}">${l}</button>`).join('')}</span>`;
+  const cur = root.dataset.accent || SET.accent;
+  const sw = THEME.ACCENTS.map(a => { const p = THEME.palette(a.hex, 'dark'); return `<button class="sw${a.id === cur ? ' on' : ''}" data-accent="${a.id}" role="radio" aria-checked="${a.id === cur}" aria-label="${a.name}" style="--c:${a.hex};--oc:${p.on}"><span class="dot">${I.check}</span><span>${a.name}</span></button>`; }).join('');
+  return `<div class="th-wrap">
+  <div class="th-prev" aria-hidden="true"><div class="pv-tabs"><span class="on">VIDEOS</span><span>PLAYLISTS</span></div>
+    <div class="pv-row"><div class="pv-th"><i></i></div><div class="pv-t"><b>My video</b><small>0:12 • 720p</small></div></div>
+    <div class="pv-seek"><i></i></div><span class="pv-btn">Play all</span><span class="th-name" id="thName">${accentInfo(cur).name}</span><div class="pv-fab">${I.play}</div></div>
+  <div class="section-h">Colour (10)</div>
+  <div class="swatches" role="radiogroup" aria-label="Accent colour">${sw}</div>
+  <div class="section-h">Theme</div>
+  <div class="set"><span class="si">${I.theme}</span><div class="st"><b>Mode</b><small>Auto follows your phone's setting</small></div>${seg('theme', [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']])}</div>
+  <div class="set"><span class="si">${I.glass}</span><div class="st"><b>Style</b><small>Liquid glass or exact classic look</small></div>${seg('style', [['glass', 'Liquid Glass'], ['classic', 'Classic']])}</div>
+  <div class="th-note">Tap a colour and the whole app changes instantly. Saved on this phone only.</div></div>`;
+}
 function applyRootAttrs() {
-  root.dataset.style = params.get('style') || SET.style;
-  root.dataset.theme = params.get('theme') || SET.theme;
+  // style / theme (dark, light, auto) / accent colour: theme.js validates every value (whitelist) and sets the CSS colours + theme-color meta
+  THEME.apply(SET, params);
   root.classList.toggle('shot', params.has('shot'));
-  const glass = root.dataset.style === 'glass', light = root.dataset.theme === 'light';
-  $('meta[name=theme-color]').content = light ? '#f4f4f6' : (glass ? '#0b0b10' : '#131313');
   let cs = $('#cueStyle'); if (!cs) { cs = document.createElement('style'); cs.id = 'cueStyle'; document.head.appendChild(cs); }
   cs.textContent = `#subLine{font-size:${SET.subSize}px}`;
 }
@@ -213,16 +240,16 @@ async function rescanDir(d, o = {}) {
   try { perm = await SRC.permission(d.handle, o.ask); } catch (e) { perm = 'prompt'; }
   d.perm = perm;
   if (perm !== 'granted') { render(); return null; }
-  S.scanning = { name: d.name, found: 0 }; toast(`📂 “${d.name}” scan ho raha hai…`, 0); render();
+  S.scanning = { name: d.name, found: 0 }; toast(`📂 Scanning “${d.name}”…`, 0); render();
   let found = [];
-  try { found = await SRC.scanHandle(d.handle, n => { S.scanning.found = n; toast(`📂 ${n} videos mile…`, 0); }); }
+  try { found = await SRC.scanHandle(d.handle, n => { S.scanning.found = n; toast(`📂 Found ${n} videos…`, 0); }); }
   catch (e) { S.scanning = null; toast(`Couldn't read “${d.name}”`, 4000); render(); return null; }
   const keys = new Set(found.map(x => SRC.fkey(x.file)));
   const gone = S.media.filter(m => m.src === d.id && !keys.has(mkey(m)));       // deleted / moved on the phone → drop from library (files untouched)
   for (const m of gone) { if (P.cur === m) stopPlayback(); S.media = S.media.filter(x => x !== m); await DB.del('media', m.id).catch(() => {}); blobCache.delete(m.id); }
   if (gone.length) for (const p of S.playlists) { const n = p.items.length; p.items = p.items.filter(byId); if (p.items.length !== n) await DB.put('playlists', p).catch(() => {}); }
   for (const x of found) { const m = S.media.find(m => m.src === d.id && mkey(m) === SRC.fkey(x.file)); if (m) blobCache.set(m.id, x.file); }
-  const r = await addFiles(found.map(x => ({ ...x, src: d.id })), null, { quiet: true, label: `📂 ${found.length} videos mile` });
+  const r = await addFiles(found.map(x => ({ ...x, src: d.id })), null, { quiet: true, label: `📂 Found ${found.length} videos` });
   d.count = S.media.filter(m => m.src === d.id).length; S.scanning = null;
   const msg = [`📂 ${d.name}: ${found.length} files`]; if (r.ok) msg.push(`${r.ok} new`); if (gone.length) msg.push(`${gone.length} removed`); if (r.failed) msg.push(`${r.failed} can't play here`);
   toast(msg.join(' • '), 4000); render();
@@ -233,8 +260,8 @@ async function scanFolder() {
   const c = SRC.caps();
   if (c.native) {
     S.scanning = { name: 'phone', found: 0 }; render();
-    let items = []; try { items = await SRC.native.scan(n => { S.scanning.found = n; toast(`📂 ${n} videos mile…`, 0); }); } catch (e) { toast('Permission nahi mili — Settings me allow karo', 5000); }
-    S.scanning = null; return addFiles(items.map(x => ({ ...x, src: null })), null, { label: `📂 ${items.length} videos mile` });
+    let items = []; try { items = await SRC.native.scan(n => { S.scanning.found = n; toast(`📂 Found ${n} videos…`, 0); }); } catch (e) { toast('Permission not given — allow it in Settings', 5000); }
+    S.scanning = null; return addFiles(items.map(x => ({ ...x, src: null })), null, { label: `📂 Found ${items.length} videos` });
   }
   if (c.folderPicker) {
     let h; try { h = await SRC.pickFolder(); } catch (e) { return null; }      // user cancelled
@@ -261,18 +288,18 @@ async function restoreDirs() {
 }
 const accessHTML = () => {
   const c = SRC.caps();
-  const main = c.native || c.folderPicker ? `<button class="btn" data-act="scan-folder">${I.folder}Allow access / Folder chuno</button>`
-    : c.folderInput ? `<button class="btn" data-act="scan-folder">${I.folder}Poora folder chuno</button>` : '';
-  const tip = c.native || c.folderPicker ? 'Ek baar folder chuno (jaise DCIM, Movies ya WhatsApp Video) — naye videos har baar khud aa jayenge.'
-    : 'Ek baar poora folder chuno (jaise DCIM/Camera ya WhatsApp Video) — saare videos ek saath add ho jayenge.';
-  return `<div class="empty access-card"><div class="ac-ic">${I.folder}</div><h2>Phone ke saare videos, ek tap mein</h2>
-    <p>${tip} Sab kuch sirf aapke phone pe rehta hai — kuch bhi upload nahi hota.</p>
-    <div class="ac-btns">${main}<button class="btn ghost" data-act="add-video">${I.add}Ek-ek video chuno</button></div></div>`;
+  const main = c.native || c.folderPicker ? `<button class="btn" data-act="scan-folder">${I.folder}Allow access / Choose folder</button>`
+    : c.folderInput ? `<button class="btn" data-act="scan-folder">${I.folder}Select whole folder</button>` : '';
+  const tip = c.native || c.folderPicker ? 'Choose a folder once (like DCIM, Movies or WhatsApp Video) — new videos will show up automatically every time.'
+    : 'Select a whole folder once (like DCIM/Camera or WhatsApp Video) — all its videos are added together.';
+  return `<div class="empty access-card"><div class="ac-ic">${I.folder}</div><h2>All your phone's videos, in one tap</h2>
+    <p>${tip} Everything stays on your phone — nothing is uploaded.</p>
+    <div class="ac-btns">${main}<button class="btn ghost" data-act="add-video">${I.add}Pick videos one by one</button></div></div>`;
 };
 const accessBarHTML = () => {
   const need = S.dirs.filter(d => d.perm === 'prompt' || d.perm === 'denied');
-  if (S.scanning) return `<div class="access-bar"><span>📂 Scan ho raha hai… ${S.scanning.found} videos mile</span></div>`;
-  return need.length ? `<div class="access-bar"><span>📂 ${need.map(d => esc(d.name)).join(', ')} — naye videos dekhne ke liye access do</span><button class="btn" data-act="refresh-access">Refresh access</button></div>` : '';
+  if (S.scanning) return `<div class="access-bar"><span>📂 Scanning… found ${S.scanning.found} videos</span></div>`;
+  return need.length ? `<div class="access-bar"><span>📂 ${need.map(d => esc(d.name)).join(', ')} — allow access again to see new videos</span><button class="btn" data-act="refresh-access">Refresh access</button></div>` : '';
 };
 async function saveMedia(m) { try { await DB.put('media', m); } catch (e) {} }
 
@@ -369,6 +396,8 @@ function render() {
     if (!g) { S.folder = null; dropLayer('detail'); return render(); }
     setToolbar(g.name, closeDetail); setTabs([], 0);
     html = wrap(g.items.filter(m => match(m, q)).map(m => mediaRow(m)).join(''));
+  } else if (S.sub === 'theme') {
+    setToolbar('Theme & Colour', closeDetail); setTabs([], 0); html = themeHTML();
   } else if (S.sub === 'history') {
     setToolbar('History', closeDetail); setTabs([], 0);
     const items = S.media.filter(m => m.lastPlayed && match(m, q)).sort((a, b) => b.lastPlayed - a.lastPlayed);
@@ -417,8 +446,9 @@ function moreHTML() {
   const seg = (k, opts) => `<span class="seg">${opts.map(([v, l]) => `<button data-set="${k}" data-val="${v}" class="${String(SET[k]) === String(v) ? 'on' : ''}">${l}</button>`).join('')}</span>`;
   const sortName = { name: 'Name', date: 'Date added', duration: 'Length', size: 'Size' }[SET.sort];
   return `<div class="section-h">Appearance</div>
+  <div class="set" data-act="theme-screen" tabindex="0"><span class="si">${I.theme}</span><div class="st"><b>Theme &amp; Colour</b><small>${modeName(SET.theme)} • ${accentInfo(SET.accent).name} • 10 colours</small></div><span class="cdot"></span></div>
   <div class="set"><span class="si">${I.glass}</span><div class="st"><b>Style</b><small>Liquid glass or exact classic look</small></div>${seg('style', [['glass', 'Liquid Glass'], ['classic', 'Classic']])}</div>
-  <div class="set"><span class="si">${I.theme}</span><div class="st"><b>Theme</b></div>${seg('theme', [['dark', 'Dark'], ['light', 'Light']])}</div>
+  <div class="set"><span class="si">${I.theme}</span><div class="st"><b>Theme</b></div>${seg('theme', [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto']])}</div>
   <div class="set"><span class="si">${SET.view === 'grid' ? I.grid : I.listic}</span><div class="st"><b>Video list</b></div>${seg('view', [['list', 'List'], ['grid', 'Grid']])}</div>
   <div class="section-h">Media folders</div>
   ${S.dirs.map(d => `<div class="set"><span class="si">${I.folder}</span><div class="st"><b>${esc(d.name)}</b><small>${d.count || 0} files • ${d.perm === 'granted' ? 'access on' : 'tap Rescan to allow access'}</small></div><span class="seg"><button data-act="rescan" data-dir="${d.id}">Rescan</button><button data-act="unlink-dir" data-dir="${d.id}">Remove</button></span></div>`).join('')}
@@ -431,6 +461,7 @@ function moreHTML() {
   <div class="set" data-act="clear-lib" tabindex="0"><span class="si">${I.del}</span><div class="st"><b>Clear library</b><small>Removes all videos, songs and playlists from this app</small></div></div>
   <div class="section-h">Playback</div>
   <div class="set"><span class="si">${I.bg}</span><div class="st"><b>Background audio</b><small>Keep playing when you leave the app or close the player</small></div>${seg('bgAudio', [['true', 'On'], ['false', 'Off']])}</div>
+  <div class="set"><span class="si">${I.rotate}</span><div class="st"><b>Auto landscape</b><small>Wide videos open sideways in full screen</small></div>${seg('autoRotate', [['true', 'On'], ['false', 'Off']])}</div>
   <div class="set" data-act="shortcuts" tabindex="0"><span class="si">${I.kb}</span><div class="st"><b>Keyboard shortcuts</b><small>For laptop / desktop</small></div></div>
   <div class="section-h">About</div>
   <div class="set" data-act="about" tabindex="0"><span class="si">${I.info}</span><div class="st"><b>VLC Pro by Tech Bro Z</b><small>Educational project, not affiliated with VideoLAN</small></div></div>`;
@@ -529,18 +560,27 @@ function sortSheet() {
 }
 function mainMenu() {
   openSheet(item('scan', I.folder, 'Scan phone folder') + item('addv', I.add, 'Add videos') + item('adda', I.note, 'Add audio') + item('sort', I.sort, 'Sort by…') + item('view', SET.view === 'grid' ? I.listic : I.grid, SET.view === 'grid' ? 'List view' : 'Grid view')
-    + item('group', I.group, 'Group videos by name', SET.group ? 'On' : 'Off') + item('style', I.glass, 'Style', SET.style === 'glass' ? 'Liquid Glass' : 'Classic') + item('theme', I.theme, 'Theme', SET.theme === 'dark' ? 'Dark' : 'Light')
+    + item('group', I.group, 'Group videos by name', SET.group ? 'On' : 'Off') + item('style', I.glass, 'Style', SET.style === 'glass' ? 'Liquid Glass' : 'Classic') + item('theme', I.theme, 'Theme & Colour', accentInfo(SET.accent).name)
     + item('hist', I.history, 'Playback history') + item('set', I.info, 'Settings & about'),
   onSheet({
     scan: () => { closeSheet(); scanFolder(); }, addv: () => { closeSheet(); $('#fileVideo').click(); }, adda: () => { closeSheet(); $('#fileAudio').click(); }, sort: sortSheet,
     view: () => { closeSheet(); setOpt('view', SET.view === 'grid' ? 'list' : 'grid'); },
     group: () => { closeSheet(); setOpt('group', !SET.group); },
     style: () => { closeSheet(); setOpt('style', SET.style === 'glass' ? 'classic' : 'glass'); },
-    theme: () => { closeSheet(); setOpt('theme', SET.theme === 'dark' ? 'light' : 'dark'); },
+    theme: () => { closeSheet(); openTheme(); },
     hist: () => { closeSheet(); openHistory(); }, set: () => { closeSheet(); go('more'); },
   }));
 }
-function setOpt(k, v) { if (k === 'group' || k === 'bgAudio') v = v === true || v === 'true'; SET[k] = v; saveSet(); if (k === 'style') params.delete('style'); if (k === 'theme') params.delete('theme'); applyRootAttrs(); render(); }
+function setOpt(k, v) {
+  if (k === 'group' || k === 'bgAudio' || k === 'autoRotate') v = v === true || v === 'true';
+  if (k === 'accent') return setAccent(v);
+  if (k === 'theme' && !THEME.MODES.includes(v)) return; if (k === 'style' && !THEME.STYLES.includes(v)) return;
+  SET[k] = v; saveSet(); if (k === 'style') params.delete('style'); if (k === 'theme') params.delete('theme');
+  if (k === 'theme' || k === 'style') themeFade();
+  applyRootAttrs(); render();
+}
+// Auto mode follows the phone's dark/light setting live
+if (THEME.mq) { const onSys = () => { if ((root.dataset.themeMode || SET.theme) === 'auto') { themeFade(); applyRootAttrs(); } }; THEME.mq.addEventListener ? THEME.mq.addEventListener('change', onSys) : THEME.mq.addListener(onSys); }
 function shortcutsSheet() {
   const k = [['Space / K', 'Play / pause'], ['← / J', 'Back 10 s'], ['→ / L', 'Forward 10 s'], ['↑ / ↓', 'Volume'], ['M', 'Mute'], ['F', 'Fullscreen'], ['[ / ]', 'Slower / faster'], ['N / B', 'Next / previous'], ['S', 'Screenshot'], ['P', 'Picture in picture'], ['A', 'A-B repeat'], ['Esc', 'Close player'], ['/', 'Search (library)']];
   openSheet(`<div class="sh-h">Keyboard shortcuts</div><div class="sh-body"><table class="info">${k.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table></div>`);
@@ -716,6 +756,7 @@ function openDetail(kind, val) {
 }
 function closeDetail() { dropLayer('detail'); S.folder = null; S.playlist = null; S.sub = null; render(); }
 function openHistory() { openDetail('sub', 'history'); }
+function openTheme() { if (S.nav !== 'more') { closeSearch(true); if (S.folder || S.playlist || S.sub) dropLayer('detail'); S.folder = null; S.playlist = null; S.sub = null; S.nav = 'more'; } openDetail('sub', 'theme'); }
 function openSearch() { $('.tb-main').classList.add('hidden'); $('.tb-search').classList.remove('hidden'); S.search = ''; const i = $('#searchInput'); i.value = ''; i.focus(); }
 function closeSearch(silent) { $('.tb-main').classList.remove('hidden'); $('.tb-search').classList.add('hidden'); if (S.search !== null) { S.search = null; if (!silent) render(); } }
 
@@ -735,7 +776,7 @@ $('#fab').onclick = () => {
 };
 $('#fileVideo').addEventListener('change', e => { addFiles(e.target.files, 'video'); e.target.value = ''; });
 $('#fileAudio').addEventListener('change', e => { addFiles(e.target.files, 'audio'); e.target.value = ''; });
-$('#fileDir').addEventListener('change', e => { const items = SRC.fromFolderInput(e.target.files); e.target.value = ''; if (!items.length) return toast('Is folder mein koi video/audio nahi mila', 3500); addFiles(items, null, { label: `📂 ${items.length} videos mile` }); });
+$('#fileDir').addEventListener('change', e => { const items = SRC.fromFolderInput(e.target.files); e.target.value = ''; if (!items.length) return toast('No videos or audio found in this folder', 3500); addFiles(items, null, { label: `📂 Found ${items.length} videos` }); });
 
 function currentQueueFor(row) {
   const list = row.parentElement; const ids = $$(':scope > .row[data-kind=media]', list).map(r => r.dataset.id);
@@ -743,6 +784,7 @@ function currentQueueFor(row) {
 }
 $('#content').addEventListener('click', async e => {
   const seg = e.target.closest('[data-set]'); if (seg) return setOpt(seg.dataset.set, seg.dataset.val);
+  const swb = e.target.closest('.sw[data-accent]'); if (swb) return setAccent(swb.dataset.accent);
   const act = e.target.closest('[data-act]'); const row = e.target.closest('.row');
   if (act && act.dataset.act === 'menu' && row) {
     e.stopPropagation();
@@ -753,6 +795,7 @@ $('#content').addEventListener('click', async e => {
   if (act) {
     const a = act.dataset.act;
     if (a === 'add-video') return $('#fileVideo').click();
+    if (a === 'theme-screen') return openTheme();
     if (a === 'scan-folder') return scanFolder();
     if (a === 'refresh-access') { for (const d of S.dirs.filter(d => d.perm !== 'granted')) await rescanDir(d, { ask: true }); return; }
     if (a === 'rescan') { const d = S.dirs.find(x => x.id === act.dataset.dir); return d && rescanDir(d, { ask: true }); }
@@ -817,7 +860,7 @@ async function loadCurrent(opts = {}) {
   $('#pTitle').textContent = m.name;
   $('#pSub').textContent = subOf(m) + (P.queue.length > 1 ? `  •  ${P.idx + 1}/${P.queue.length}` : '');
   const art = $('#audioArt'); art.classList.toggle('hidden', m.kind !== 'audio');
-  if (m.kind === 'audio') art.innerHTML = `<div class="disc"><span style="width:56px;height:56px;color:#ff8800">${I.note}</span></div>`;
+  if (m.kind === 'audio') art.innerHTML = `<div class="disc"><span style="width:56px;height:56px;color:var(--acc)">${I.note}</span></div>`;
   showPlayer(); updateBadges(); setMediaSession(m); updateMini();
   if (SET.boost !== 100 || SET.eq.some(v => v)) ensureAudio();
   if (P.ctx && P.ctx.state === 'suspended') P.ctx.resume().catch(() => {});
@@ -834,9 +877,7 @@ function showPlayer() {
 }
 function leavePlayer() {
   P.open = false; player.classList.add('hidden'); root.classList.remove('player-open');
-  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  if (screen.orientation && screen.orientation.unlock) try { screen.orientation.unlock(); } catch (e) {}
-  player.classList.remove('rot');
+  exitLand(); P.autoLandFor = null;
   if (!SET.bgAudio) pv.pause();
   savePos();
   if (P.cur && !pv.ended) { $('#mini').classList.remove('hidden'); root.classList.add('has-mini'); updateMini(); }
@@ -926,12 +967,14 @@ const gest = $('#gest'), ind = $('#ind'), seekHint = $('#seekHint');
 let G = null, lastTap = 0, lastZone = '', tapT = null, indT = null;
 function showInd(icon, frac, txt) { ind.classList.remove('hidden'); $('.ind-ic', ind).innerHTML = icon; $('.ind-bar i', ind).style.width = clamp(frac, 0, 1) * 100 + '%'; $('.ind-txt', ind).textContent = txt; clearTimeout(indT); indT = setTimeout(() => ind.classList.add('hidden'), 900); }
 function flash(sel) { const el = $(sel); el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 450); }
+const gpt = e => player.classList.contains('rot') ? { x: e.clientY, y: innerWidth - e.clientX } : { x: e.clientX, y: e.clientY };   // rotated player: screen → player axes
 gest.addEventListener('pointerdown', e => {
-  G = { x: e.clientX, y: e.clientY, t: Date.now(), w: gest.clientWidth, h: gest.clientHeight, mode: null, vol: pv.volume, bright: P.bright, time: pv.currentTime, target: null };
+  const q = gpt(e);
+  G = { x: q.x, y: q.y, t: Date.now(), w: gest.clientWidth, h: gest.clientHeight, mode: null, vol: pv.volume, bright: P.bright, time: pv.currentTime, target: null };
   try { gest.setPointerCapture(e.pointerId); } catch (err) {}
 });
 gest.addEventListener('pointermove', e => {
-  if (!G || P.locked) return; const dx = e.clientX - G.x, dy = e.clientY - G.y;
+  if (!G || P.locked) return; const q = gpt(e), dx = q.x - G.x, dy = q.y - G.y;
   if (!G.mode) { if (Math.abs(dx) > 14 || Math.abs(dy) > 14) G.mode = Math.abs(dx) > Math.abs(dy) ? 'seek' : (G.x < G.w / 2 ? 'bright' : 'vol'); else return; }
   if (G.mode === 'bright') { P.bright = clamp(G.bright - dy / (G.h * 0.5), 0.15, 1.5); pv.style.filter = P.bright === 1 ? '' : `brightness(${P.bright})`; showInd(I.sun, (P.bright - 0.15) / 1.35, 'Brightness ' + Math.round(P.bright * 100) + '%'); }
   else if (G.mode === 'vol') { const v = clamp(G.vol - dy / (G.h * 0.5), 0, 1); pv.volume = v; pv.muted = v === 0; showInd(v ? I.vol : I.mute, v, 'Volume ' + Math.round(v * 100) + '%'); }
@@ -946,7 +989,7 @@ gest.addEventListener('pointerup', e => {
   const now = Date.now(); const zone = g.x < g.w * 0.38 ? 'L' : g.x > g.w * 0.62 ? 'R' : 'C';
   if (now - lastTap < 300 && zone === lastZone) {
     clearTimeout(tapT); lastTap = 0;
-    if (zone === 'L') { skip(-10); flash('#dblL'); } else if (zone === 'R') { skip(10); flash('#dblR'); } else togglePlay();
+    if (zone === 'L') { skip(-10); flash('#dblL'); } else if (zone === 'R') { skip(10); flash('#dblR'); } else rotate();   // double-tap middle = landscape ↔ portrait
     return;
   }
   lastTap = now; lastZone = zone; clearTimeout(tapT); tapT = setTimeout(toggleControls, 300);
@@ -1084,22 +1127,65 @@ async function pip() {
 const ASPECTS = [['', 'Best fit'], ['fill', 'Fill screen (crop)'], ['stretch', 'Stretch'], ['r169', '16:9'], ['r43', '4:3']];
 function setAspect(i) { P.aspect = (i + ASPECTS.length) % ASPECTS.length; pv.className = ASPECTS[P.aspect][0]; toast('Aspect: ' + ASPECTS[P.aspect][1], 1400); }
 function aspectSheet() { openSheet(`<div class="sh-h">Aspect ratio</div>` + ASPECTS.map(([c, l], i) => item('a', i === P.aspect ? I.check : I.blank, l, '', '', `data-i="${i}"`)).join(''), onSheet({ a: b => { setAspect(+b.dataset.i); closeSheet(); } })); }
-async function rotate() {
-  const o = screen.orientation;
-  try {
-    if (!o || !o.lock) throw new Error('no lock');
-    if (!document.fullscreenElement) await player.requestFullscreen();
-    const toLand = o.type.startsWith('portrait'); await o.lock(toLand ? 'landscape' : 'portrait'); toast(toLand ? 'Landscape' : 'Portrait', 1200);
-  } catch (e) { player.classList.toggle('rot'); toast(player.classList.contains('rot') ? 'Rotated 90°' : 'Rotation reset', 1200); }
+/* Landscape (Noor's bug report, Nov 1: video did not go sideways): fullscreen + screen.orientation.lock like VLC;
+   phones without lock (iPhone Safari) get a CSS-rotated fullscreen player; turning the phone for real also works. */
+const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+const viewLand = () => innerWidth > innerHeight;
+const vidLand = () => !(pv.videoWidth && pv.videoHeight) || pv.videoWidth >= pv.videoHeight;   // auto-pick: wide video → landscape, vertical → portrait
+const isLand = () => player.classList.contains('rot') || (fsEl() && screen.orientation && screen.orientation.type ? screen.orientation.type.startsWith('landscape') : viewLand());
+async function enterFs() {
+  if (fsEl()) return true;
+  const el = document.documentElement;   // whole page, so menus / toasts still show above the player in fullscreen
+  const f = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (f) { try { await f.call(el, { navigationUI: 'hide' }); } catch (e) {} }
+  return !!fsEl();
 }
+async function lockTo(land) {
+  const o = screen.orientation; if (!o || !o.lock) return false;
+  try { await o.lock(land ? 'landscape' : 'portrait'); return true; } catch (e) { return false; }
+}
+function unlockOrient() { try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch (e) {} }
+function syncFsIcon() { $('#pFull').innerHTML = (fsEl() || player.classList.contains('rot')) ? I.fullx : I.full; player.classList.toggle('is-land', isLand()); }
+async function setLand(land, opts = {}) {
+  const wasFs = !!fsEl();
+  const fs = await enterFs();
+  const locked = fs && await lockTo(land);
+  const leaveFs = async () => { if (fsEl()) { try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} } };
+  if (locked) player.classList.remove('rot');
+  else if (opts.auto) { if (!wasFs) await leaveFs(); syncFsIcon(); return false; }
+  else {                                     // fallback (no lock, e.g. iPhone): rotate the whole player 90°
+    const want = land && !viewLand();
+    if (want || !wasFs) await leaveFs();     // browser fullscreen would cancel the CSS rotation
+    player.classList.toggle('rot', want);
+  }
+  P.land = land; syncFsIcon();
+  if (!opts.quiet) toast(land ? 'Landscape' : 'Portrait', 1100);
+  return locked;
+}
+async function exitLand() {
+  unlockOrient(); player.classList.remove('rot'); P.land = false;
+  if (fsEl()) { try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
+  syncFsIcon();
+}
+async function rotate() { return setLand(!isLand()); }
 async function fullscreen() {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else if (player.requestFullscreen) await player.requestFullscreen();
-    else if (pv.webkitEnterFullscreen) pv.webkitEnterFullscreen();
-  } catch (e) { toast('Fullscreen not available here'); }
+  if (fsEl() || player.classList.contains('rot')) return exitLand();
+  const ok = await setLand(vidLand(), { quiet: true });
+  if (!ok && !fsEl() && !player.classList.contains('rot') && pv.webkitEnterFullscreen) { try { pv.webkitEnterFullscreen(); } catch (e) { toast('Fullscreen not available here'); } }
 }
-document.addEventListener('fullscreenchange', () => { $('#pFull').innerHTML = document.fullscreenElement ? I.fullx : I.full; });
+// auto: a wide video opens in landscape on phones (only where the phone lets us lock the screen)
+function autoLand() {
+  if (!P.open || SET.autoRotate === false || P.autoLandFor === P.cur) return;
+  if (!matchMedia('(pointer: coarse)').matches || params.has('shot')) return;
+  P.autoLandFor = P.cur;
+  if (vidLand() && !isLand()) setLand(true, { auto: true, quiet: true });
+}
+pv.addEventListener('loadedmetadata', autoLand);
+document.addEventListener('fullscreenchange', () => { if (!fsEl()) { unlockOrient(); P.land = player.classList.contains('rot'); } syncFsIcon(); });
+document.addEventListener('webkitfullscreenchange', syncFsIcon);
+// the phone was really turned: the CSS rotation is no longer needed
+const onTurn = () => { if (player.classList.contains('rot') && viewLand()) player.classList.remove('rot'); if (P.open) syncFsIcon(); };
+addEventListener('resize', onTurn); addEventListener('orientationchange', onTurn);
 function playerMenu() {
   const sleepTxt = P.sleepEnd ? fmt((P.sleepEnd - Date.now()) / 1000) : P.sleepEOV ? 'End of video' : 'Off';
   const abTxt = P.A == null ? 'Set A' : P.B == null ? 'Set B' : 'Turn off';
@@ -1181,6 +1267,6 @@ async function init() {
   render();
   restoreDirs();
 }
-window.VLC = { S, P, get SET() { return SET; }, addFiles, render, srtToVtt, videoEntries, Liquid, linkFolder, rescanDir, rescanAll, scanFolder, unlinkDir };
+window.VLC = { S, P, get SET() { return SET; }, setAccent, openTheme, THEME, addFiles, render, srtToVtt, videoEntries, Liquid, linkFolder, rescanDir, rescanAll, scanFolder, unlinkDir };
 init();
 })();

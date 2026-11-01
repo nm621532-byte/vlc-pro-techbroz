@@ -362,7 +362,7 @@ async def main():
           window.showDirectoryPicker = async () => window.__root;
           return F.map(f => f.name); })()""")
         await p3.evaluate("""window.__toasts = []; new MutationObserver(() => window.__toasts.push(document.getElementById('toast').textContent)).observe(document.getElementById('toast'), {childList: true, subtree: true, characterData: true})""")
-        check('folder: onboarding card offers "Allow access / Folder chuno"', 'Allow access' in await p3.inner_text('.access-card'))
+        check('folder: onboarding card offers "Allow access / Choose folder"', 'Allow access / Choose folder' in await p3.inner_text('.access-card'))
         await p3.click('.access-card [data-act=scan-folder]')
         for _ in range(80):
             if await p3.evaluate('VLC.S.media.length') >= 5 and not await p3.evaluate('VLC.S.scanning'): break
@@ -374,7 +374,7 @@ async def main():
         check('folder scan: real thumbnails + durations', all(x['d'] > 0 for x in lib) and all(x['t'] for x in lib if x['k'] == 'video'))
         txt = await p3.inner_text('#content')
         check('folder scan: grouped by phone folder like VLC (Camera, WhatsApp Video)', 'Camera' in txt and 'WhatsApp Video' in txt and txt.count('2 videos') >= 2, txt[:120].replace('\n', ' | '))
-        check('folder scan: progress shown ("N videos mile…")', any('videos mile' in t for t in await p3.evaluate('window.__toasts')))
+        check('folder scan: progress shown ("Found N videos…")', any('Found' in t and 'videos' in t for t in await p3.evaluate('window.__toasts')))
         mx = await p3.evaluate('window.__max')
         check('folder scan: max 2 thumbnails at a time', 1 <= mx <= 2, f'max concurrent {mx}')
         check('folder scan: folder remembered (More → Media folders)', await p3.evaluate('VLC.S.dirs.length') == 1)
@@ -405,7 +405,7 @@ async def main():
         p4 = await ctx4.new_page(); err4 = []; p4.on('pageerror', lambda e: err4.append(str(e)))
         await p4.add_init_script("delete window.showDirectoryPicker")
         await p4.goto(URL + '?style=' + STYLE); await p4.wait_for_timeout(500)
-        check('fallback: card says "Poora folder chuno" when folder picker is missing', 'Poora folder chuno' in await p4.inner_text('.access-card'))
+        check('fallback: card says "Select whole folder" when folder picker is missing', 'Select whole folder' in await p4.inner_text('.access-card'))
         root_dir = os.path.join(tmpd, 'Movies'); wa_dir = os.path.join(root_dir, 'WhatsApp Video'); os.makedirs(wa_dir)
         for v in vids_all[:3]: shutil.copy(v, wa_dir)
         shutil.copy(vids_all[3], root_dir); shutil.copy(os.path.join(tmpd, 'notes.txt'), wa_dir)
